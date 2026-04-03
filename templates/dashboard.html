@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Polymarket Trading Agent Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+    <style>
+        .chart-container {
+            position: relative;
+            height: 300px;
+            width: 100%;
+        }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-900">
+    <div class="min-h-screen">
+        <!-- Header -->
+        <header class="bg-white shadow-md">
+            <div class="max-w-7xl mx-auto px-4 py-6">
+                <div class="flex justify-between items-center">
+                    <h1 class="text-2xl font-bold text-indigo-600">Polymarket Trading Agent</h1>
+                    <div class="flex space-x-4">
+                        <span id="last-update" class="text-sm text-gray-500">Last update: --</span>
+                        <button id="refresh-btn" class="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 transition-colors">
+                            Refresh Now
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="max-w-7xl mx-auto px-4 py-8">
+            <!-- Status Overview -->
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+                <div class="bg-white rounded-lg shadow p-6">
+                    <h3 class="text-lg font-semibold mb-2 text-gray-700">Portfolio Value</h3>
+                    <p id="portfolio-value" class="text-3xl font-bold text-indigo-600">$0.00</p>
+                    <p class="text-sm text-gray-500" id="portfolio-change">0.00% (24h)</p>
+                </div>
+                
+                <div class="bg-white rounded-lg shadow p-6">
+                    <h3 class="text-lg font-semibold mb-2 text-gray-700">Active Positions</h3>
+                    <p id="active-positions" class="text-3xl font-bold text-green-600">0</p>
+                    <p class="text-sm text-gray-500">Currently open</p>
+                </div>
+                
+                <div class="bg-white rounded-lg shadow p-6">
+                    <h3 class="text-lg font-semibold mb-2 text-gray-700">Today's P&L</h3>
+                    <p id="daily-pnl" class="text-3xl font-bold" id="daily-pnl-value">$0.00</p>
+                    <p class="text-sm text-gray-500" id="daily-pnl-label">Profit/Loss</p>
+                </div>
+                
+                <div class="bg-white rounded-lg shadow p-6">
+                    <h3 class="text-lg font-semibold mb-2 text-gray-700">Win Rate</h3>
+                    <p id="win-rate" class="text-3xl font-bold text-blue-600">0%</p>
+                    <p class="text-sm text-gray-500">From closed trades</p>
+                </div>
+            </div>
+
+            <!-- Charts Section -->
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+                <div class="bg-white rounded-lg shadow p-6">
+                    <h3 class="text-lg font-semibold mb-4">Portfolio Performance</h3>
+                    <div class="chart-container">
+                        <canvas id="portfolio-chart"></canvas>
+                    </div>
+                </div>
+                
+                <div class="bg-white rounded-lg shadow p-6">
+                    <h3 class="text-lg font-semibold mb-4">Opportunities by Type</h3>
+                    <div class="chart-container">
+                        <canvas id="opportunities-chart"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Markets and Opportunities -->
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <!-- Markets Section -->
+                <section class="bg-white rounded-lg shadow">
+                    <div class="p-6 border-b">
+                        <h2 class="text-xl font-semibold flex items-center space-x-2">
+                            <svg class="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-5h.01M9 16h.01"></path>
+                            </svg>
+                            Active Markets
+                        </h2>
+                    </div>
+                    <div id="markets-list" class="p-6 space-y-4">
+                        <!-- Market items will be populated here -->
+                        <div class="text-center py-8 text-gray-500">
+                            Loading markets...
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Opportunities Section -->
+                <section class="bg-white rounded-lg shadow">
+                    <div class="p-6 border-b">
+                        <h2 class="text-xl font-semibold flex items-center space-x-2">
+                            <svg class="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                            </svg>
+                            Trading Opportunities
+                        </h2>
+                    </div>
+                    <div id="opportunities-list" class="p-6 space-y-4">
+                        <!-- Opportunity items will be populated here -->
+                        <div class="text-center py-8 text-gray-500">
+                            Loading opportunities...
+                        </div>
+                    </div>
+                </section>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        // Update last update time
+        function updateLastUpdate() {
+            fetch('/api/status')
+                .then(response => response.json())
+                .then(data => {
+                    const lastUpdateEl = document.getElementById('last-update');
+                    if (data.last_update) {
+                        const date = new Date(data.last_update);
+                        lastUpdateEl.textContent = `Last update: ${date.toLocaleTimeString()}`;
+                    }
+                })
+                .catch(() => {
+                    document.getElementById('last-update').textContent = 'Last update: Error';
+                });
+        }
+
+        // Update portfolio overview
+        function updatePortfolioOverview() {
+            fetch('/api/portfolio')
+                .then(response => response.json())
+                .then(data => {
+                    // Update portfolio value
+                    const valueEl = document.getElementById('portfolio-value');
+                    if (data.total_value !== undefined) {
+                        valueEl.textContent = `$${parseFloat(data.total_value).toFixed(2)}`;
+                    }
+                    
+                    // Update daily P&L
+                    const dailyPnLEl = document.getElementById('daily-pnl-value');
+                    const dailyPnLLabelEl = document.getElementById('daily-pnl-label');
+                    if (data.daily_pnl !== undefined) {
+                        const pnl = parseFloat(data.daily_pnl);
+                        dailyPnLEl.textContent = `$${pnl.toFixed(2)}`;
+                        dailyPnLEl.className = pnl >= 0 ? 'text-3xl font-bold text-green-600' : 'text-3xl font-bold text-red-600';
+                        dailyPnLLabelEl.textContent = pnl >= 0 ? 'Profit' : 'Loss';
+                    }
+                    
+                    // Update active positions
+                    const positionsEl = document.getElementById('active-positions');
+                    if (data.open_positions_count !== undefined) {
+                        positionsEl.textContent = data.open_positions_count;
+                    }
+                    
+                    // Update win rate
+                    const winRateEl = document.getElementById('win-rate');
+                    if (data.win_rate !== undefined) {
+                        winRateEl.textContent = `${parseFloat(data.win_rate * 100).toFixed(1)}%`;
+                    }
+                })
+                .catch(console.error);
+        }
+
+        // Update markets list
+        function updateMarketsList() {
+            fetch('/api/markets')
+                .then(response => response.json())
+                .then(markets => {
+                    const container = document.getElementById('markets-list');
+                    if (markets.length === 0) {
+                        container.innerHTML = '<div class="text-center py-8 text-gray-500">No markets found</div>';
+                        return;
+                    }
+                    
+                    if (markets[0] && markets[0].error) {
+                        container.innerHTML = `<div class="text-center py-8 text-red-500">Error loading markets: ${markets[0].error}</div>`;
+                        return;
+                    }
+                    
+                    container.innerHTML = markets.map(market => `
+                        <div class="border rounded-lg p-4 hover:bg-gray-50 transition-colors">
+                            <div class="flex justify-between items-start">
+                                <div>
+                                    <h4 class="font-medium text-gray-800">${market.question}</h4>
+                                    <p class="text-sm text-gray-500">${market.outcomes[0]}: ${(market.outcome_prices[0]*100).toFixed(1)}% | ${market.outcomes[1]}: ${(market.outcome_prices[1]*100).toFixed(1)}%</p>
+                                    <p class="text-xs text-gray-400 mt-1">Volume: $${market.volume_24h.toLocaleString()} | Ends: ${new Date(market.end_date).toLocaleDateString()}</p>
+                                </div>
+                                <div class="text-right space-x-2">
+                                    <button onclick="showMarketDetail('${market.slug}')" class="text-xs bg-indigo-100 text-indigo-800 px-2 py-1 rounded hover:bg-indigo-200">Details</button>
+                                    <button onclick="analyzeMarket('${market.token_ids[0]}')" class="text-xs bg-green-100 text-green-800 px-2 py-1 rounded hover:bg-green-200">Analyze</button>
+                                </div>
+                            </div>
+                        </div>
+                    `).join('');
+                })
+                .catch(console.error);
+        }
+
+        // Update opportunities list
+        function updateOpportunitiesList() {
+            fetch('/api/opportunities')
+                .then(response => response.json())
+                .then(opps => {
+                    const container = document.getElementById('opportunities-list');
+                    if (opps.length === 0) {
+                        container.innerHTML = '<div class="text-center py-8 text-gray-500">No opportunities found</div>';
+                        return;
+                    }
+                    
+                    if (opps[0] && opps[0].error) {
+                        container.innerHTML = `<div class="text-center py-8 text-red-500">Error loading opportunities: ${opps[0].error}</div>`;
+                        return;
+                    }
+                    
+                    container.innerHTML = opps.map(opp => {
+                        const edgeTypeClass = {
+                            'arbitrage': 'bg-blue-100 text-blue-800',
+                            'momentum': 'bg-green-100 text-green-800',
+                            'mean-reversion': 'bg-purple-100 text-purple-800',
+                            'news': 'bg-orange-100 text-orange-800'
+                        }[opp.edge_type || 'unknown'] || 'bg-gray-100 text-gray-800';
+                        
+                        return `
+                            <div class="border rounded-lg p-4 hover:bg-gray-50 transition-colors">
+                                <div class="flex justify-between items-start">
+                                    <div>
+                                        <h4 class="font-medium text-gray-800">${opp.market}</h4>
+                                        <p class="text-sm ${edgeTypeClass} px-2 py-1 rounded">${opp.edge_type || 'unknown'}</p>
+                                        <p class="text-sm text-gray-500 mt-1">Edge: ${(opp.edge*100).toFixed(1)}% | Size: $${opp.size_usd}</p>
+                                        <p class="text-xs text-gray-400 mt-1">Confidence: ${(opp.confidence*100).toFixed(0)}% | ${opp.side} at $${opp.entry_price}</p>
+                                    </div>
+                                    <div class="text-right space-x-2">
+                                        <button onclick="executeTrade('${JSON.stringify(opp).replace(/'/g, "\\'")}')" class="text-xs bg-indigo-100 text-indigo-800 px-2 py-1 rounded hover:bg-indigo-200">Execute</button>
+                                        <button onclick="showOpportunityDetail('${JSON.stringify(opp).replace(/'/g, "\\'")}')" class="text-xs bg-gray-100 text-gray-800 px-2 py-1 rounded hover:bg-gray-200">Details</button>
+                                    </div>
+                                </div>
+                            </div>
+                        `;
+                    }).join('');
+                })
+                .catch(console.error);
+        }
+
+        // Execute a trade
+        function executeTrade(recommendationStr) {
+            if (!confirm('Execute this trade?\\n\\n' + recommendationStr)) {
+                return;
+            }
+            
+            fetch('/api/execute_trade', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ recommendation: JSON.parse(recommendationStr) })
+            })
+            .then(response => response.json())
+            .then(result => {
+                if (result.error) {
+                    alert(`Execution failed: ${result.error}`);
+                } else {
+                    alert('Trade executed successfully!');
+                    // Refresh data
+                    updatePortfolioOverview();
+                    updateOpportunitiesList();
+                }
+            })
+            .catch(error => {
+                alert(`Execution error: ${error}`);
+            });
+        }
+
+        // Placeholder functions
+        function showMarketDetail(slug) {
+            alert(`Market details for: ${slug}`);
+        }
+        
+        function analyzeMarket(tokenId) {
+            alert(`Analyzing market with token: ${tokenId}`);
+        }
+        
+        function showOpportunityDetail(oppStr) {
+            alert(`Opportunity details: ${oppStr}`);
+        }
+
+        // Initialize charts (simple placeholders for now)
+        function initCharts() {
+            // Portfolio performance chart
+            const portfolioCtx = document.getElementById('portfolio-chart').getContext('2d');
+            new Chart(portfolioCtx, {
+                type: 'line',
+                data: {
+                    labels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+                    datasets: [{
+                        label: 'Portfolio Value ($)',
+                        data: [1000, 1005, 1002, 1008, 1010, 1007, 1012],
+                        borderColor: 'rgba(99, 102, 241, 1)',
+                        backgroundColor: 'rgba(99, 102, 241, 0.1)',
+                        tension: 0.3
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false
+                }
+            });
+            
+            // Opportunities chart
+            const oppCtx = document.getElementById('opportunities-chart').getContext('2d');
+            new Chart(oppCtx, {
+                type: 'doughnut',
+                data: {
+                    labels: ['Arbitrage', 'Momentum', 'Mean Reversion', 'News-Driven'],
+                    datasets: [{
+                        data: [15, 35, 25, 25],
+                        backgroundColor: [
+                            'rgba(59, 130, 246, 0.8)',
+                            'rgba(34, 197, 94, 0.8)',
+                            'rgba(139, 92, 246, 0.8)',
+                            'rgba(249, 115, 22, 0.8)'
+                        ]
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false
+                }
+            });
+        }
+
+        // Event listeners
+        document.getElementById('refresh-btn').addEventListener('click', () => {
+            updatePortfolioOverview();
+            updateMarketsList();
+            updateOpportunitiesList();
+            updateLastUpdate();
+        });
+
+        // Initial load
+        document.addEventListener('DOMContentLoaded', () => {
+            updatePortfolioOverview();
+            updateMarketsList();
+            updateOpportunitiesList();
+            updateLastUpdate();
+            initCharts();
+            
+            // Set up periodic updates
+            setInterval(updatePortfolioOverview, 30000);
+            setInterval(updateMarketsList, 30000);
+            setInterval(updateOpportunitiesList, 30000);
+            setInterval(updateLastUpdate, 30000);
+        });
+    </script>
+</body>
+</html>
