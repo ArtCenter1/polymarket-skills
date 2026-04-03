@@ -12,6 +12,7 @@ venv/
 .env.*
 !.env.example
 *.key
+.kilo
 .pytest_cache/
 .coverage
 *.db
