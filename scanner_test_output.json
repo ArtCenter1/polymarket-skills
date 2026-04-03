@@ -1,0 +1,232 @@
+[
+  {
+    "question": "Spurs vs. Clippers",
+    "slug": "nba-sas-lac-2026-04-02",
+    "url": "https://polymarket.com/event/nba-sas-lac-2026-04-02",
+    "outcomes": [
+      "Spurs",
+      "Clippers"
+    ],
+    "outcome_prices": [
+      0.9995,
+      0.0005
+    ],
+    "token_ids": [
+      "99969794444523158222638792918531145371262906249733117976401662588024805483979",
+      "2236019882324375532602377264010043501664844731378923291426098695790949238147"
+    ],
+    "volume_24h": 5285025.829369014,
+    "volume_total": 5539662.94966101,
+    "liquidity": 2048656.97264,
+    "end_date": "2026-04-03T02:30:00Z",
+    "active": true,
+    "accepting_orders": true
+  },
+  {
+    "question": "Lakers vs. Thunder",
+    "slug": "nba-lal-okc-2026-04-02",
+    "url": "https://polymarket.com/event/nba-lal-okc-2026-04-02",
+    "outcomes": [
+      "Lakers",
+      "Thunder"
+    ],
+    "outcome_prices": [
+      0.0005,
+      0.9995
+    ],
+    "token_ids": [
+      "17137206920857383523614304650148756829688496576722556348226923267242745234263",
+      "79430538486890042217394357287691256943773590031203722661431806588828947604057"
+    ],
+    "volume_24h": 3504877.6323610074,
+    "volume_total": 3657766.684951959,
+    "liquidity": 1673664.01056,
+    "end_date": "2026-04-03T01:30:00Z",
+    "active": true,
+    "accepting_orders": true
+  },
+  {
+    "question": "US forces enter Iran by April 30?",
+    "slug": "us-forces-enter-iran-by-april-30-899",
+    "url": "https://polymarket.com/event/us-forces-enter-iran-by-april-30-899",
+    "outcomes": [
+      "Yes",
+      "No"
+    ],
+    "outcome_prices": [
+      0.665,
+      0.335
+    ],
+    "token_ids": [
+      "2916184120206223749839849644877707470354946028257066951797428049170871002238",
+      "76533108781962275310651165149634079251899733930834190485860627580128626747247"
+    ],
+    "volume_24h": 2603961.8501340016,
+    "volume_total": 20297667.59618872,
+    "liquidity": 594068.1946,
+    "end_date": "2026-04-30T00:00:00Z",
+    "active": true,
+    "accepting_orders": true
+  },
+  {
+    "question": "Cavaliers vs. Warriors",
+    "slug": "nba-cle-gsw-2026-04-02",
+    "url": "https://polymarket.com/event/nba-cle-gsw-2026-04-02",
+    "outcomes": [
+      "Cavaliers",
+      "Warriors"
+    ],
+    "outcome_prices": [
+      0.9995,
+      0.0005
+    ],
+    "token_ids": [
+      "74633353349855199309796983551748599553840735521917141958727086055842527368706",
+      "42424640592600051943786160006113085044987925617588540686828063937838422534551"
+    ],
+    "volume_24h": 2044086.839881003,
+    "volume_total": 2081812.7000370047,
+    "liquidity": 727461.61144,
+    "end_date": "2026-04-03T02:00:00Z",
+    "active": true,
+    "accepting_orders": true
+  },
+  {
+    "question": "Will Iraq win the 2026 FIFA World Cup?",
+    "slug": "will-iraq-win-the-2026-fifa-world-cup",
+    "url": "https://polymarket.com/event/will-iraq-win-the-2026-fifa-world-cup",
+    "outcomes": [
+      "Yes",
+      "No"
+    ],
+    "outcome_prices": [
+      0.0025,
+      0.9975
+    ],
+    "token_ids": [
+      "53465512181802150755993130711224070738002100921790051090044528012833736167995",
+      "104137480799334367207764507943317769727862093918816792190533154232239547234217"
+    ],
+    "volume_24h": 1877010.2030000002,
+    "volume_total": 2305876.610332999,
+    "liquidity": 2326347.13016,
+    "end_date": "2026-07-20T00:00:00Z",
+    "active": true,
+    "accepting_orders": true
+  },
+  {
+    "question": "Will Beth Van Duyne win the 2026 Texas Republican Primary?",
+    "slug": "will-beth-van-duyne-win-the-2026-republican-primary",
+    "url": "https://polymarket.com/event/will-beth-van-duyne-win-the-2026-republican-primary",
+    "outcomes": [
+      "Yes",
+      "No"
+    ],
+    "outcome_prices": [
+      0.0005,
+      0.9995
+    ],
+    "token_ids": [
+      "21186780488327911840011813665635909989130966340151208407558076091167956134393",
+      "77116825697988046462797118744062320242186651085415319815298138122528923099354"
+    ],
+    "volume_24h": 1827061.2199999979,
+    "volume_total": 5284849.975071013,
+    "liquidity": 94726.94925,
+    "end_date": "2026-05-26T00:00:00Z",
+    "active": true,
+    "accepting_orders": true
+  },
+  {
+    "question": "Will Congo DR win the 2026 FIFA World Cup?",
+    "slug": "will-congo-dr-win-the-2026-fifa-world-cup",
+    "url": "https://polymarket.com/event/will-congo-dr-win-the-2026-fifa-world-cup",
+    "outcomes": [
+      "Yes",
+      "No"
+    ],
+    "outcome_prices": [
+      0.0025,
+      0.9975
+    ],
+    "token_ids": [
+      "87403333427856945144645806003352057704193778078820484282942507058200689996202",
+      "43528414195007977002195624860045129351164807876978747566236159804271175691009"
+    ],
+    "volume_24h": 1810787.590999,
+    "volume_total": 1990454.035999,
+    "liquidity": 2246098.82789,
+    "end_date": "2026-07-20T00:00:00Z",
+    "active": true,
+    "accepting_orders": true
+  },
+  {
+    "question": "Pelicans vs. Trail Blazers",
+    "slug": "nba-nop-por-2026-04-02",
+    "url": "https://polymarket.com/event/nba-nop-por-2026-04-02",
+    "outcomes": [
+      "Pelicans",
+      "Trail Blazers"
+    ],
+    "outcome_prices": [
+      0.0005,
+      0.9995
+    ],
+    "token_ids": [
+      "14906048329685608365083605465638417389372684178960972384587439912027247328229",
+      "35223933682397377751296067881539150582714964959391166674864954311094255626465"
+    ],
+    "volume_24h": 1701563.6077750083,
+    "volume_total": 1772041.9256709884,
+    "liquidity": 1095791.8692,
+    "end_date": "2026-04-03T02:00:00Z",
+    "active": true,
+    "accepting_orders": true
+  },
+  {
+    "question": "Will Movement for a Better Hungary (Jobbik) win the most seats in the next Hungarian parliamentary election?",
+    "slug": "will-movement-for-a-better-hungary-jobbik-win-the-most-seats-in-the-next-hungarian-parliamentary-election",
+    "url": "https://polymarket.com/event/will-movement-for-a-better-hungary-jobbik-win-the-most-seats-in-the-next-hungarian-parliamentary-election",
+    "outcomes": [
+      "Yes",
+      "No"
+    ],
+    "outcome_prices": [
+      0.0005,
+      0.9995
+    ],
+    "token_ids": [
+      "30849933191316686435782664908401890804163810081470441695928144220535231269695",
+      "52007040390240268041235785750806922647862387092936200192192228912357135484566"
+    ],
+    "volume_24h": 1510385.364999999,
+    "volume_total": 16532442.532013956,
+    "liquidity": 42779.76741,
+    "end_date": "2026-04-12T00:00:00Z",
+    "active": true,
+    "accepting_orders": true
+  },
+  {
+    "question": "Spread: Thunder (-9.5)",
+    "slug": "nba-lal-okc-2026-04-02-spread-home-9pt5",
+    "url": "https://polymarket.com/event/nba-lal-okc-2026-04-02-spread-home-9pt5",
+    "outcomes": [
+      "Thunder",
+      "Lakers"
+    ],
+    "outcome_prices": [
+      0.9995,
+      0.0005
+    ],
+    "token_ids": [
+      "91921529816249141009427906916676299539326313684484402341303740778788379203909",
+      "107490598314468188802998449772287516903847437191069131238850272558192562896557"
+    ],
+    "volume_24h": 1476062.0638929987,
+    "volume_total": 1477100.036618009,
+    "liquidity": 422956.77477,
+    "end_date": "2026-04-03T01:30:00Z",
+    "active": true,
+    "accepting_orders": true
+  }
+]

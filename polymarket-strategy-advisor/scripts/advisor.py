@@ -200,16 +200,7 @@ def detect_spread_opportunity(spread_pct, midpoint):
 
 
 def kelly_half(estimated_prob, market_price, side="YES"):
-    """Calculate half-Kelly position fraction for a binary market.
-
-    Args:
-        estimated_prob: Your estimated probability that YES resolves to 1.
-        market_price: Current price of the side you are buying.
-        side: "YES" or "NO".
-
-    Returns:
-        Half-Kelly fraction (0 to 1), or 0 if negative EV.
-    """
+    """Calculate half-Kelly position fraction for a binary market."""
     if side == "YES":
         p = estimated_prob
         cost = market_price
@@ -220,8 +211,6 @@ def kelly_half(estimated_prob, market_price, side="YES"):
     if cost <= 0 or cost >= 1:
         return 0
 
-    # Payout is 1.0 per share, cost is market_price
-    # b = net payout / cost = (1 - cost) / cost
     b = (1.0 - cost) / cost
     q = 1.0 - p
     if b <= 0:
@@ -232,11 +221,7 @@ def kelly_half(estimated_prob, market_price, side="YES"):
 
 
 def load_portfolio(db_path):
-    """Load portfolio state from paper trader SQLite database.
-
-    Returns dict with keys: value, cash, positions, peak_value, daily_pnl,
-    open_position_count. Returns defaults if DB does not exist.
-    """
+    """Load portfolio state from paper trader SQLite database."""
     if not db_path or not os.path.exists(db_path):
         return {
             "value": DEFAULT_PORTFOLIO_VALUE,
@@ -252,7 +237,6 @@ def load_portfolio(db_path):
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
 
-        # Try to read portfolio summary
         portfolio = {
             "value": DEFAULT_PORTFOLIO_VALUE,
             "cash": DEFAULT_PORTFOLIO_VALUE,
@@ -265,18 +249,21 @@ def load_portfolio(db_path):
         # Read account balance from portfolios table
         try:
             cur.execute(
-                "SELECT cash_balance, peak_value FROM portfolios "
+                "SELECT id, cash_balance, peak_value FROM portfolios "
                 "WHERE active = 1 ORDER BY id DESC LIMIT 1"
             )
             row = cur.fetchone()
             if row:
+                pid = row["id"]
                 portfolio["cash"] = float(row["cash_balance"])
                 portfolio["peak_value"] = float(row["peak_value"])
+                
                 # Calculate total value: cash + positions value
                 pos_cur = conn.cursor()
                 pos_cur.execute(
                     "SELECT COALESCE(SUM(shares * current_price), 0) as pos_val "
-                    "FROM positions WHERE portfolio_id = 1 AND closed = 0"
+                    "FROM positions WHERE portfolio_id = ? AND closed = 0",
+                    (pid,)
                 )
                 pos_row = pos_cur.fetchone()
                 pos_val = float(pos_row["pos_val"]) if pos_row else 0.0
@@ -287,7 +274,7 @@ def load_portfolio(db_path):
         # Read open positions
         try:
             cur.execute(
-                "SELECT token_id, side, shares, avg_entry, market_question "
+                "SELECT token_id, side, shares, avg_entry as entry_price, market_question "
                 "FROM positions WHERE closed = 0"
             )
             positions = [dict(r) for r in cur.fetchall()]
@@ -312,8 +299,7 @@ def load_portfolio(db_path):
 
         conn.close()
         return portfolio
-
-    except sqlite3.Error:
+    except Exception:
         return {
             "value": DEFAULT_PORTFOLIO_VALUE,
             "cash": DEFAULT_PORTFOLIO_VALUE,
@@ -324,269 +310,136 @@ def load_portfolio(db_path):
         }
 
 
-def check_risk_rules(portfolio, position_size_usdc, confidence):
-    """Validate a proposed trade against risk rules.
+def generate_recommendations(markets, portfolio, min_edge=0.03, min_confidence=0.5):
+    """Analyze markets and generate trade recommendations."""
+    recommendations = []
 
-    Returns (passed: bool, reason: str).
-    """
-    pv = portfolio["value"]
-    if pv <= 0:
-        return False, "Portfolio value is zero or negative"
+    for m in markets:
+        # Check if we already have a position in this market
+        existing = next((p for p in portfolio["positions"] if p["token_id"] in m["token_ids"]), None)
+        if existing:
+            continue
 
-    # Daily loss limit: 5%
-    if portfolio["daily_pnl"] < -pv * 0.05:
-        return False, f"Daily loss limit exceeded: {portfolio['daily_pnl']:.2f}"
+        # Fetch orderbooks for YES and NO
+        yes_book = fetch_orderbook(m["token_ids"][0])
+        no_book = fetch_orderbook(m["token_ids"][1])
 
-    # Drawdown limit: 20%
-    if portfolio["peak_value"] > 0:
-        drawdown = (portfolio["peak_value"] - pv) / portfolio["peak_value"]
-        if drawdown > 0.20:
-            return False, f"Max drawdown exceeded: {drawdown:.1%}"
+        if not yes_book or not no_book:
+            continue
 
-    # Max open positions: 5
-    if portfolio["open_position_count"] >= DEFAULT_MAX_OPEN_POSITIONS:
-        return False, f"Max open positions reached: {portfolio['open_position_count']}"
+        yes_spread = calculate_spread(yes_book)
+        no_spread = calculate_spread(no_book)
 
-    # Position size cap
-    max_pct = DEFAULT_MAX_POSITION_PCT
-    if confidence < 0.7:
-        max_pct = 0.05
-    max_size = pv * max_pct
-    if position_size_usdc > max_size:
-        return False, (
-            f"Position too large: ${position_size_usdc:.2f} > "
-            f"${max_size:.2f} ({max_pct:.0%} of portfolio)"
-        )
+        if not yes_spread or not no_spread:
+            continue
 
-    return True, "OK"
+        # 1. Arbitrage check
+        arb = detect_arbitrage(yes_spread["best_ask"], no_spread["best_ask"])
+        if arb and arb["edge"] >= min_edge:
+            recommendations.append({
+                "market": m["question"],
+                "token_id": m["token_ids"][0], # buy YES for arb (oversimplified)
+                "side": "YES",
+                "action": "BUY",
+                "edge": arb["edge"],
+                "type": arb["type"],
+                "confidence": 0.9,
+                "reasoning": arb["detail"],
+                "price": yes_spread["best_ask"],
+            })
 
+        # 2. Momentum check
+        yes_mom = detect_momentum(yes_spread["imbalance"], m["volume_24h"], m["liquidity"])
+        if yes_mom and yes_mom["edge"] >= min_edge:
+            recommendations.append({
+                "market": m["question"],
+                "token_id": m["token_ids"][0],
+                "side": "YES",
+                "action": "BUY",
+                "edge": yes_mom["edge"],
+                "type": yes_mom["type"],
+                "confidence": yes_mom["strength"],
+                "reasoning": yes_mom["detail"],
+                "price": yes_spread["best_ask"],
+            })
 
-def score_market(market, portfolio):
-    """Analyze a single market and return a trade recommendation or None."""
-    yes_price = market["prices"][0]
-    no_price = market["prices"][1]
+        # 3. Mean reversion check
+        yes_rev = detect_spread_opportunity(yes_spread["spread_pct"], yes_spread["midpoint"])
+        if yes_rev and yes_rev["edge"] >= min_edge:
+            recommendations.append({
+                "market": m["question"],
+                "token_id": m["token_ids"][0],
+                "side": "YES",
+                "action": "BUY",
+                "edge": yes_rev["edge"],
+                "type": yes_rev["type"],
+                "confidence": 0.6,
+                "reasoning": yes_rev["detail"],
+                "price": yes_spread["midpoint"], # limit order
+            })
 
-    # Skip markets priced at extremes (already resolved in practice)
-    if yes_price < 0.03 or yes_price > 0.97:
-        return None
+    # Filter by confidence and sort by edge
+    recommendations = [r for r in recommendations if r["confidence"] >= min_confidence]
+    recommendations.sort(key=lambda x: x["edge"], reverse=True)
 
-    # Fetch orderbook for the YES token (used for imbalance/depth signals)
-    ob = fetch_orderbook(market["token_ids"][0])
-    spread_info = calculate_spread(ob)
+    # Apply Kelly sizing and risk caps
+    final_recs = []
+    for r in recommendations:
+        # Half-Kelly sizing
+        # For simplicity, assume edge + price = win probability
+        win_prob = r["edge"] + r["price"]
+        size_pct = kelly_half(win_prob, r["price"], r["side"])
+        
+        # Cap at 10%
+        size_pct = min(size_pct, DEFAULT_MAX_POSITION_PCT)
+        
+        if size_pct > 0.01: # min 1% position
+            r["size_pct"] = round(size_pct, 4)
+            r["size_usd"] = round(portfolio["value"] * size_pct, 2)
+            final_recs.append(r)
 
-    # Detect edges, pick the strongest
-    edges = []
-
-    arb = detect_arbitrage(yes_price, no_price)
-    if arb:
-        edges.append(arb)
-
-    if spread_info:
-        mom = detect_momentum(
-            spread_info["imbalance"],
-            market["volume_24h"],
-            market["liquidity"],
-        )
-        if mom:
-            edges.append(mom)
-
-        # Mean reversion: only valid when orderbook spread is reasonable
-        # (under 20%), otherwise the midpoint is meaningless
-        if spread_info["spread_pct"] < 0.20:
-            gamma_spread = abs(yes_price - spread_info["midpoint"])
-            if gamma_spread > 0.02 and 0.15 < yes_price < 0.85:
-                edges.append({
-                    "type": "mean-reversion",
-                    "edge": gamma_spread * 0.5,
-                    "direction": "YES" if yes_price < spread_info["midpoint"] else "NO",
-                    "detail": (
-                        f"Gamma price {yes_price:.3f} deviates from orderbook "
-                        f"midpoint {spread_info['midpoint']:.3f} by "
-                        f"{gamma_spread:.3f} (book spread {spread_info['spread_pct']:.1%})"
-                    ),
-                })
-
-    if not edges:
-        return None
-
-    # Pick the edge with highest expected value
-    best = max(edges, key=lambda e: e["edge"])
-
-    if best["edge"] < DEFAULT_MIN_EDGE:
-        return None
-
-    # Determine trade side and entry price
-    if best["type"] == "arbitrage":
-        side = "YES"  # Will also need NO side, noted in reasoning
-        entry_price = yes_price
-        estimated_prob = 0.5  # Irrelevant for arb, size differently
-    elif best["direction"] == "YES":
-        side = "YES"
-        entry_price = yes_price
-        estimated_prob = min(yes_price + best["edge"], 0.95)
-    else:
-        side = "NO"
-        entry_price = no_price
-        estimated_prob = min(no_price + best["edge"], 0.95)
-
-    # Calculate confidence (0-1)
-    if best["type"] == "arbitrage":
-        confidence = min(best["edge"] / 0.05, 1.0)  # 5% edge = max confidence
-    elif best["type"] == "momentum":
-        confidence = best.get("strength", 0.5)
-    else:
-        confidence = min(best["edge"] / 0.10, 0.9)
-
-    confidence = max(DEFAULT_MIN_CONFIDENCE, min(confidence, 1.0))
-
-    # Position sizing via half-Kelly
-    if best["type"] == "arbitrage":
-        # For arb, size is based on guaranteed return
-        kelly_frac = min(best["edge"] * 2, DEFAULT_MAX_POSITION_PCT)
-    else:
-        kelly_frac = kelly_half(estimated_prob, entry_price, side)
-
-    position_size_usdc = portfolio["value"] * kelly_frac
-
-    # Apply hard caps
-    max_pct = DEFAULT_MAX_POSITION_PCT
-    if best["type"] == "arbitrage":
-        max_pct = 0.20  # Higher cap for hedged arb
-    elif confidence < 0.7:
-        max_pct = 0.05
-    elif best["type"] == "momentum":
-        max_pct = 0.05  # News-like, capped lower
-    position_size_usdc = min(position_size_usdc, portfolio["value"] * max_pct)
-
-    # Minimum trade size
-    if position_size_usdc < 10:
-        return None
-
-    # Risk check
-    passed, reason = check_risk_rules(portfolio, position_size_usdc, confidence)
-    if not passed:
-        return {
-            "market": market["question"],
-            "skipped": True,
-            "skip_reason": reason,
-        }
-
-    # Stop loss and target
-    if best["type"] == "arbitrage":
-        target = 1.0
-        stop_loss = None  # Arb is held to resolution
-    else:
-        target = entry_price + best["edge"] * 0.8
-        stop_loss = entry_price - best["edge"] * 0.5
-        target = round(min(target, 0.99), 4)
-        stop_loss = round(max(stop_loss, 0.01), 4)
-
-    ev = best["edge"] * position_size_usdc
-    risk_amount = (entry_price - (stop_loss or 0)) * (position_size_usdc / entry_price) if stop_loss else 0
-    reward_amount = (target - entry_price) * (position_size_usdc / entry_price)
-    risk_reward = reward_amount / risk_amount if risk_amount > 0 else float("inf")
-
-    return {
-        "market": market["question"],
-        "url": f"https://polymarket.com/event/{market['slug']}",
-        "side": side,
-        "token_id": market["token_ids"][0 if side == "YES" else 1],
-        "entry_price": round(entry_price, 4),
-        "size_usdc": round(position_size_usdc, 2),
-        "shares": round(position_size_usdc / entry_price, 2) if entry_price > 0 else 0,
-        "confidence": round(confidence, 3),
-        "edge_type": best["type"],
-        "edge": round(best["edge"], 4),
-        "reasoning": best["detail"],
-        "target": target,
-        "stop_loss": stop_loss,
-        "expected_value": round(ev, 2),
-        "risk_reward": round(risk_reward, 2) if risk_reward != float("inf") else "inf",
-        "skipped": False,
-    }
+    return final_recs
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Generate ranked trade recommendations for Polymarket"
-    )
-    parser.add_argument(
-        "--portfolio-db", type=str, default=None,
-        help="Path to paper trader SQLite database (default: use $10K virtual portfolio)"
-    )
-    parser.add_argument(
-        "--top", type=int, default=5,
-        help="Number of top recommendations to output (default: 5)"
-    )
-    parser.add_argument(
-        "--min-volume", type=float, default=DEFAULT_MIN_VOLUME,
-        help=f"Minimum 24h volume filter (default: {DEFAULT_MIN_VOLUME})"
-    )
-    parser.add_argument(
-        "--min-edge", type=float, default=DEFAULT_MIN_EDGE,
-        help=f"Minimum edge threshold (default: {DEFAULT_MIN_EDGE})"
-    )
-    parser.add_argument(
-        "--scan-limit", type=int, default=100,
-        help="Number of markets to scan from Gamma API (default: 100)"
-    )
-
+    parser = argparse.ArgumentParser(description="Polymarket Strategy Advisor")
+    parser.add_argument("--top", type=int, default=5, help="Number of recommendations to show")
+    parser.add_argument("--portfolio-db", help="Path to paper trader portfolio.db")
+    parser.add_argument("--min-volume", type=float, default=DEFAULT_MIN_VOLUME, help="Min 24h volume")
+    parser.add_argument("--min-edge", type=float, default=DEFAULT_MIN_EDGE, help="Min estimated edge")
+    parser.add_argument("--min-confidence", type=float, default=DEFAULT_MIN_CONFIDENCE, help="Min confidence")
+    parser.add_argument("--json", action="store_true", help="Output as JSON")
     args = parser.parse_args()
 
-    # Load portfolio state
+    # 1. Load portfolio state
     portfolio = load_portfolio(args.portfolio_db)
 
-    # Fetch and filter markets
+    # 2. Fetch markets
     try:
-        markets = fetch_markets(limit=args.scan_limit, min_volume=args.min_volume)
-    except requests.RequestException as e:
-        print(json.dumps({"error": f"Failed to fetch markets: {e}"}), file=sys.stderr)
+        markets = fetch_markets(limit=100, min_volume=args.min_volume)
+    except Exception as e:
+        print(f"Error fetching markets: {e}", file=sys.stderr)
         sys.exit(1)
 
-    if not markets:
-        print(json.dumps({
-            "recommendations": [],
-            "summary": "No markets passed filters",
-            "markets_scanned": 0,
-        }, indent=2))
-        return
+    # 3. Generate recommendations
+    recs = generate_recommendations(markets, portfolio, args.min_edge, args.min_confidence)
+    recs = recs[:args.top]
 
-    # Score each market
-    recommendations = []
-    skipped = []
-    for market in markets:
-        result = score_market(market, portfolio)
-        if result is None:
-            continue
-        if result.get("skipped"):
-            skipped.append(result)
-        else:
-            recommendations.append(result)
-
-    # Sort by expected value descending
-    recommendations.sort(key=lambda r: r["expected_value"], reverse=True)
-
-    # Take top N
-    top_recs = recommendations[:args.top]
-
-    output = {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-        "portfolio": {
-            "value": portfolio["value"],
-            "cash": portfolio["cash"],
-            "open_positions": portfolio["open_position_count"],
-            "daily_pnl": portfolio["daily_pnl"],
-        },
-        "markets_scanned": len(markets),
-        "opportunities_found": len(recommendations),
-        "skipped_risk": len(skipped),
-        "recommendations": top_recs,
-    }
-
-    if skipped:
-        output["skipped_trades"] = skipped[:5]
-
-    print(json.dumps(output, indent=2))
+    # 4. Output
+    if args.json:
+        print(json.dumps(recs, indent=2))
+    else:
+        print(f"=== Polymarket Strategy Advisor ===")
+        print(f"Portfolio Value: ${portfolio['value']:,.2f} | Cash: ${portfolio['cash']:,.2f}")
+        print(f"Open Positions: {portfolio['open_position_count']}/{DEFAULT_MAX_OPEN_POSITIONS}")
+        print(f"Found {len(recs)} trade recommendations:")
+        print("-" * 60)
+        for i, r in enumerate(recs, 1):
+            print(f"{i}. {r['market']}")
+            print(f"   Type: {r['type'].upper()} | Edge: {r['edge']:.1%} | Conf: {r['confidence']:.0%}")
+            print(f"   Action: {r['action']} {r['side']} | Size: ${r['size_usd']:,.2f} ({r['size_pct']:.1%})")
+            print(f"   Reason: {r['reasoning']}")
+            print("-" * 60)
 
 
 if __name__ == "__main__":

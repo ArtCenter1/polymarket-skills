@@ -13,6 +13,7 @@ import os
 import sqlite3
 import sys
 import time
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.request import urlopen, Request
@@ -39,12 +40,9 @@ DEFAULT_RISK = {
 }
 
 # Polymarket fee tiers — most markets are fee-free.
-# Crypto 5-min / 15-min markets use a dynamic maker/taker model.
-# We model the common case (0%) and let callers override.
 DEFAULT_FEE_RATE = 0.0
 
 # Token ID format: numeric string, typically 50-100 digits
-import re
 _TOKEN_ID_RE = re.compile(r"^\d{20,120}$")
 
 
@@ -290,211 +288,26 @@ def get_portfolio(name: str = "default", refresh_prices: bool = True) -> dict:
                 "UPDATE portfolios SET peak_value = ?, updated_at = ? WHERE id = ?",
                 (total_value, datetime.now(timezone.utc).isoformat(), pid),
             )
+            pf["peak_value"] = total_value
 
-        conn.commit()
+        drawdown = (pf["peak_value"] - total_value) / pf["peak_value"] if pf["peak_value"] > 0 else 0
 
         return {
-            "portfolio_id": pid,
-            "name": pf["name"],
+            "name": name,
             "starting_balance": starting,
-            "cash_balance": round(pf["cash_balance"], 4),
+            "cash_balance": pf["cash_balance"],
             "positions_value": round(positions_value, 4),
             "total_value": round(total_value, 4),
             "pnl": round(pnl, 4),
-            "pnl_pct": round(pnl / starting * 100, 2) if starting else 0,
-            "peak_value": round(max(pf["peak_value"], total_value), 4),
-            "drawdown_pct": round(
-                (max(pf["peak_value"], total_value) - total_value)
-                / max(pf["peak_value"], total_value) * 100, 2
-            ) if max(pf["peak_value"], total_value) > 0 else 0,
-            "positions": pos_list,
+            "pnl_pct": round((pnl / starting) * 100, 2) if starting else 0,
+            "drawdown_pct": round(drawdown * 100, 2),
             "num_open_positions": len(pos_list),
+            "positions": pos_list,
             "created_at": pf["created_at"],
         }
     finally:
         conn.close()
 
-
-# ---------------------------------------------------------------------------
-# Order book fill simulation
-# ---------------------------------------------------------------------------
-
-def _simulate_fill(
-    orderbook: dict,
-    side: str,
-    size_usd: float,
-    fee_rate: float = DEFAULT_FEE_RATE,
-) -> dict:
-    """
-    Walk the order book to simulate a realistic fill.
-
-    For a BUY: we consume asks (ascending price).
-    For a SELL: we consume bids (descending price).
-
-    Returns: {avg_price, shares_filled, total_cost, fee}
-    """
-    if side == "BUY":
-        levels = orderbook.get("asks", [])
-        # asks are already sorted ascending by CLOB
-        levels = sorted(levels, key=lambda x: float(x["price"]))
-    else:
-        levels = orderbook.get("bids", [])
-        levels = sorted(levels, key=lambda x: float(x["price"]), reverse=True)
-
-    if not levels:
-        raise RuntimeError(
-            f"No {'asks' if side == 'BUY' else 'bids'} in order book — "
-            "market may be illiquid or closed"
-        )
-
-    remaining_usd = size_usd
-    total_shares = 0.0
-    total_spent = 0.0
-
-    for level in levels:
-        price = float(level["price"])
-        available_shares = float(level["size"])
-
-        if price <= 0:
-            continue
-
-        # How many shares can we buy/sell at this level with remaining USD?
-        max_shares_at_level = remaining_usd / price
-        fill_shares = min(available_shares, max_shares_at_level)
-        fill_cost = fill_shares * price
-
-        total_shares += fill_shares
-        total_spent += fill_cost
-        remaining_usd -= fill_cost
-
-        if remaining_usd < 0.001:  # close enough to zero
-            break
-
-    if total_shares == 0:
-        raise RuntimeError("Could not fill any shares — check order size and book depth")
-
-    avg_price = total_spent / total_shares
-    fee = total_spent * fee_rate
-
-    return {
-        "avg_price": round(avg_price, 6),
-        "shares_filled": round(total_shares, 4),
-        "total_cost": round(total_spent + fee, 4),
-        "fee": round(fee, 4),
-        "levels_consumed": min(len(levels), 10),  # info only
-    }
-
-
-# ---------------------------------------------------------------------------
-# Risk validation
-# ---------------------------------------------------------------------------
-
-def _validate_risk(
-    portfolio: dict,
-    risk_config: dict,
-    side: str,
-    size_usd: float,
-    token_id: str,
-) -> tuple[bool, str]:
-    """Check trade against risk rules. Returns (ok, reason)."""
-    total_value = portfolio["total_value"]
-    starting = portfolio["starting_balance"]
-    if total_value <= 0:
-        return False, "Portfolio value is zero or negative"
-
-    # Max position size
-    max_pos = total_value * risk_config.get("max_position_pct", 0.10)
-    if size_usd > max_pos:
-        return False, (
-            f"Trade size ${size_usd:.2f} exceeds max position "
-            f"${max_pos:.2f} ({risk_config['max_position_pct']*100:.0f}% of portfolio)"
-        )
-
-    # Max drawdown
-    peak = portfolio.get("peak_value", starting)
-    if peak > 0:
-        current_dd = (peak - total_value) / peak
-        if current_dd >= risk_config.get("max_drawdown_pct", 0.30):
-            return False, (
-                f"Max drawdown exceeded: {current_dd*100:.1f}% "
-                f"(limit {risk_config['max_drawdown_pct']*100:.0f}%)"
-            )
-
-    # Max concurrent positions (only for new positions)
-    if side == "BUY":
-        max_conc = risk_config.get("max_concurrent_positions", 5)
-        if portfolio["num_open_positions"] >= max_conc:
-            # Check if this is adding to an existing position
-            existing = [p for p in portfolio["positions"]
-                        if p["token_id"] == token_id]
-            if not existing:
-                return False, (
-                    f"Max concurrent positions reached: "
-                    f"{portfolio['num_open_positions']}/{max_conc}"
-                )
-
-    # Single market exposure
-    existing_value = sum(
-        p["value"] for p in portfolio["positions"]
-        if p["token_id"] == token_id
-    )
-    new_exposure = existing_value + size_usd
-    max_market = total_value * risk_config.get("max_single_market_pct", 0.20)
-    if new_exposure > max_market:
-        return False, (
-            f"Single market exposure ${new_exposure:.2f} exceeds limit "
-            f"${max_market:.2f} ({risk_config['max_single_market_pct']*100:.0f}%)"
-        )
-
-    # Human approval threshold
-    approval_pct = risk_config.get("human_approval_pct", 0.15)
-    if size_usd > total_value * approval_pct:
-        return False, (
-            f"Trade size ${size_usd:.2f} exceeds human approval threshold "
-            f"({approval_pct*100:.0f}% of portfolio = ${total_value*approval_pct:.2f}). "
-            f"Reduce size or set force=True to override."
-        )
-
-    return True, "OK"
-
-
-def _check_daily_loss(
-    conn: sqlite3.Connection,
-    pid: int,
-    starting_balance: float,
-    risk_config: dict,
-) -> tuple[bool, str]:
-    """Check if daily loss limit has been exceeded."""
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
-    # Sum today's realized losses from SELL trades using the entry_avg
-    # snapshot recorded at trade time (not the current positions table).
-    row = conn.execute(
-        """SELECT COALESCE(SUM(
-            CASE WHEN action='SELL' AND entry_avg IS NOT NULL
-                 THEN (price - entry_avg) * shares
-                 ELSE 0 END
-        ), 0) as daily_realized
-        FROM trades
-        WHERE portfolio_id = ? AND date(executed_at) = ?""",
-        (pid, today),
-    ).fetchone()
-
-    daily_loss = abs(min(0, row["daily_realized"])) if row else 0
-    limit = starting_balance * risk_config.get("daily_loss_limit_pct", 0.05)
-
-    if daily_loss >= limit:
-        return False, (
-            f"Daily loss limit exceeded: ${daily_loss:.2f} "
-            f"(limit ${limit:.2f} = {risk_config['daily_loss_limit_pct']*100:.0f}% "
-            f"of starting balance)"
-        )
-    return True, "OK"
-
-
-# ---------------------------------------------------------------------------
-# Trade execution
-# ---------------------------------------------------------------------------
 
 def place_order(
     token_id: str,
@@ -506,21 +319,7 @@ def place_order(
     fee_rate: float = DEFAULT_FEE_RATE,
     force: bool = False,
 ) -> dict:
-    """
-    Place a paper trade.
-
-    Args:
-        token_id: CLOB token ID
-        side: 'YES' or 'NO'
-        size: Amount in USD to spend
-        price: Limit price (None = market order using live book)
-        reasoning: Why this trade was made
-        portfolio_name: Which portfolio to trade in
-        fee_rate: Fee rate override (default 0 for most markets)
-        force: Skip risk checks (except balance)
-
-    Returns: Trade execution result dict.
-    """
+    """Place a paper trade."""
     side = side.upper()
     if side not in ("YES", "NO"):
         raise ValueError(f"Side must be YES or NO, got: {side}")
@@ -528,12 +327,10 @@ def place_order(
         raise ValueError("Size must be positive")
 
     # Fetch market data and simulate fill BEFORE acquiring the write lock
-    # so we don't hold the lock during network I/O.
     market_info = lookup_market(token_id)
     market_question = market_info["question"] if market_info else "Unknown market"
 
     if price is not None:
-        # Limit order: fill at specified price
         shares = size / price
         fee = size * fee_rate
         fill = {
@@ -543,11 +340,10 @@ def place_order(
             "fee": round(fee, 4),
         }
     else:
-        # Market order: walk the real order book
         orderbook = fetch_orderbook(token_id)
         fill = _simulate_fill(orderbook, "BUY", size, fee_rate)
 
-    # Get portfolio state for risk checks (also does network I/O)
+    # Get portfolio state for risk checks
     portfolio_state = get_portfolio(portfolio_name, refresh_prices=True)
 
     conn = _get_db()
@@ -559,11 +355,11 @@ def place_order(
         pid = pf["id"]
         risk_config = json.loads(pf["risk_config"])
 
-        # Balance check (always enforced) — re-read inside transaction
-        if size > pf["cash_balance"]:
+        # Balance check
+        if fill["total_cost"] > pf["cash_balance"]:
             conn.rollback()
             raise RuntimeError(
-                f"Insufficient balance: need ${size:.2f}, "
+                f"Insufficient balance: need ${fill['total_cost']:.2f}, "
                 f"have ${pf['cash_balance']:.2f}"
             )
 
@@ -597,7 +393,6 @@ def place_order(
             old_shares = existing["shares"]
             old_avg = existing["avg_entry"]
             new_shares = old_shares + fill["shares_filled"]
-            # Weighted average entry
             new_avg = (
                 (old_avg * old_shares + fill["avg_price"] * fill["shares_filled"])
                 / new_shares
@@ -628,14 +423,7 @@ def place_order(
             (round(new_balance, 4), now, pid),
         )
 
-        # Compute avg entry at trade time for accurate daily loss tracking
-        if existing:
-            existing = dict(existing) if not isinstance(existing, dict) else existing
-            trade_entry_avg = existing["avg_entry"]
-        else:
-            trade_entry_avg = fill["avg_price"]
-
-        # Record trade (includes entry_avg snapshot for daily loss calculation)
+        # Record trade with entry_avg snapshot for daily loss tracking
         conn.execute(
             """INSERT INTO trades
                (portfolio_id, token_id, market_question, side, action,
@@ -677,22 +465,8 @@ def close_position(
     fee_rate: float = DEFAULT_FEE_RATE,
     reasoning: str = "",
 ) -> dict:
-    """
-    Close an open position at current market price.
-
-    Args:
-        token_id: The CLOB token to close
-        side: YES or NO (auto-detected if only one position exists)
-        portfolio_name: Which portfolio
-        fee_rate: Override fee rate
-        reasoning: Why closing
-
-    Returns: Close execution result.
-    """
-    # Fetch order book BEFORE acquiring write lock (network I/O)
+    """Close an open position at current market price."""
     orderbook = fetch_orderbook(token_id)
-
-    # Walk bids to simulate sell fill
     bids = sorted(
         orderbook.get("bids", []),
         key=lambda x: float(x["price"]),
@@ -703,9 +477,7 @@ def close_position(
 
     conn = _get_db()
     try:
-        # Acquire exclusive write lock for atomic credit
         conn.execute("BEGIN IMMEDIATE")
-
         pf = _active_portfolio(conn, portfolio_name)
         pid = pf["id"]
 
@@ -725,15 +497,11 @@ def close_position(
 
         if not positions:
             conn.rollback()
-            raise RuntimeError(
-                f"No open position for token {token_id}"
-                + (f" side={side}" if side else "")
-            )
+            raise RuntimeError(f"No open position for token {token_id}" + (f" side={side}" if side else ""))
 
         results = []
         for pos in positions:
             pos = dict(pos)
-
             remaining_shares = pos["shares"]
             total_proceeds = 0.0
             for level in bids:
@@ -747,58 +515,34 @@ def close_position(
 
             shares_sold = pos["shares"] - remaining_shares
             if shares_sold <= 0:
-                conn.rollback()
-                raise RuntimeError("Could not sell any shares at current bids")
+                continue
 
-            avg_sell_price = total_proceeds / shares_sold if shares_sold > 0 else 0
+            avg_sell_price = total_proceeds / shares_sold
             fee = total_proceeds * fee_rate
             net_proceeds = total_proceeds - fee
-
             pnl = (avg_sell_price - pos["avg_entry"]) * shares_sold - fee
-
             now = datetime.now(timezone.utc).isoformat()
 
-            # Mark position closed
-            conn.execute(
-                "UPDATE positions SET closed = 1, closed_at = ?, updated_at = ? WHERE id = ?",
-                (now, now, pos["id"]),
-            )
-
-            # Credit proceeds to balance
+            conn.execute("UPDATE positions SET closed = 1, closed_at = ?, updated_at = ? WHERE id = ?", (now, now, pos["id"]))
             new_balance = pf["cash_balance"] + net_proceeds
-            conn.execute(
-                "UPDATE portfolios SET cash_balance = ?, updated_at = ? WHERE id = ?",
-                (round(new_balance, 4), now, pid),
-            )
+            conn.execute("UPDATE portfolios SET cash_balance = ?, updated_at = ? WHERE id = ?", (round(new_balance, 4), now, pid))
             pf["cash_balance"] = new_balance
 
-            # Record trade with entry_avg snapshot for daily loss tracking
             conn.execute(
                 """INSERT INTO trades
                    (portfolio_id, token_id, market_question, side, action,
-                    shares, price, fee, total_cost, reasoning, executed_at,
-                    entry_avg)
+                    shares, price, fee, total_cost, reasoning, executed_at, entry_avg)
                    VALUES (?, ?, ?, ?, 'SELL', ?, ?, ?, ?, ?, ?, ?)""",
                 (pid, token_id, pos["market_question"], pos["side"],
-                 round(shares_sold, 4), round(avg_sell_price, 6),
-                 round(fee, 4), round(net_proceeds, 4), reasoning, now,
-                 pos["avg_entry"]),
+                 shares_sold, avg_sell_price, fee, total_proceeds, reasoning, now, pos["avg_entry"]),
             )
 
             results.append({
-                "status": "closed",
-                "action": "SELL",
                 "side": pos["side"],
-                "token_id": token_id,
-                "market": pos["market_question"],
                 "shares_sold": round(shares_sold, 4),
-                "avg_sell_price": round(avg_sell_price, 6),
-                "avg_entry_price": pos["avg_entry"],
-                "fee": round(fee, 4),
-                "net_proceeds": round(net_proceeds, 4),
+                "avg_sell_price": round(avg_sell_price, 4),
                 "realized_pnl": round(pnl, 4),
                 "new_balance": round(new_balance, 4),
-                "executed_at": now,
             })
 
         conn.commit()
@@ -810,264 +554,198 @@ def close_position(
         conn.close()
 
 
-def get_trades(
-    portfolio_name: str = "default",
-    limit: int = 50,
-) -> list[dict]:
-    """Return trade history, most recent first."""
+def _validate_risk(pf: dict, risk: dict, action: str, size: float, token_id: str) -> tuple[bool, str]:
+    """Validate a trade against risk limits."""
+    if action == "BUY":
+        if size > pf["total_value"] * risk["max_position_pct"]:
+            return False, f"Position size ${size:.2f} exceeds {risk['max_position_pct']:.0%} limit"
+        if pf["drawdown_pct"] > risk["max_drawdown_pct"] * 100:
+            return False, f"Drawdown {pf['drawdown_pct']}% exceeds {risk['max_drawdown_pct']:.0%} limit"
+        if pf["num_open_positions"] >= risk["max_concurrent_positions"]:
+            # Check if we already have this token
+            exists = any(p["token_id"] == token_id for p in pf["positions"])
+            if not exists:
+                return False, f"Max concurrent positions ({risk['max_concurrent_positions']}) reached"
+    return True, ""
+
+
+def _check_daily_loss(conn: sqlite3.Connection, pid: int, starting: float, risk: dict) -> tuple[bool, str]:
+    """Check if daily loss limit has been reached."""
+    today = datetime.now(timezone.utc).date().isoformat()
+    limit = starting * risk["daily_loss_limit_pct"]
+    
+    # Calculate realized P&L today using entry_avg stored at trade time
+    row = conn.execute(
+        """SELECT SUM(
+            CASE WHEN action='SELL' THEN (price - entry_avg) * shares - fee
+                 ELSE -fee END
+        ) as daily_realized
+        FROM trades
+        WHERE portfolio_id = ? AND date(executed_at) = ?""",
+        (pid, today),
+    ).fetchone()
+    
+    realized = row["daily_realized"] or 0
+    if realized < -limit:
+        return False, f"Daily loss ${abs(realized):.2f} exceeds limit ${limit:.2f}"
+    return True, ""
+
+
+def _simulate_fill(orderbook: dict, action: str, size_usd: float, fee_rate: float) -> dict:
+    """Simulate walking the order book for a market order."""
+    if action == "BUY":
+        levels = sorted(orderbook.get("asks", []), key=lambda x: float(x["price"]))
+    else:
+        levels = sorted(orderbook.get("bids", []), key=lambda x: float(x["price"]), reverse=True)
+
+    if not levels:
+        raise RuntimeError(f"No liquidity on {action} side")
+
+    remaining = size_usd
+    shares = 0.0
+    total_cost = 0.0
+    for lvl in levels:
+        p = float(lvl["price"])
+        s = float(lvl["size"])
+        fill_usd = min(remaining, s * p)
+        shares += fill_usd / p
+        total_cost += fill_usd
+        remaining -= fill_usd
+        if remaining < 0.01:
+            break
+
+    if remaining > 1.0: # more than $1 unfilled
+        raise RuntimeError(f"Insufficient liquidity: could only fill ${size_usd - remaining:.2f} of ${size_usd:.2f}")
+
+    fee = total_cost * fee_rate
+    return {
+        "avg_price": total_cost / shares if shares > 0 else 0,
+        "shares_filled": round(shares, 4),
+        "total_cost": round(total_cost + fee, 4),
+        "fee": round(fee, 4),
+    }
+
+
+def take_snapshot(portfolio_name: str = "default") -> dict:
+    """Record a daily snapshot of the portfolio value."""
+    pf = get_portfolio(portfolio_name, refresh_prices=True)
+    today = datetime.now(timezone.utc).date().isoformat()
+    
     conn = _get_db()
     try:
-        pf = _active_portfolio(conn, portfolio_name)
+        # Get yesterday's value
+        prev = conn.execute(
+            "SELECT total_value FROM daily_snapshots WHERE portfolio_id = (SELECT id FROM portfolios WHERE name = ? AND active = 1) ORDER BY date DESC LIMIT 1",
+            (portfolio_name,)
+        ).fetchone()
+        
+        prev_val = prev["total_value"] if prev else pf["starting_balance"]
+        daily_pnl = pf["total_value"] - prev_val
+        
+        pid = conn.execute("SELECT id FROM portfolios WHERE name = ? AND active = 1", (portfolio_name,)).fetchone()["id"]
+        
+        conn.execute(
+            """INSERT OR REPLACE INTO daily_snapshots
+               (portfolio_id, date, cash_balance, positions_value, total_value, daily_pnl)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (pid, today, pf["cash_balance"], pf["positions_value"], pf["total_value"], daily_pnl)
+        )
+        conn.commit()
+        return {
+            "date": today,
+            "total_value": pf["total_value"],
+            "daily_pnl": daily_pnl
+        }
+    finally:
+        conn.close()
+
+
+def get_trades(name: str = "default", limit: int = 50) -> list:
+    """Return recent trade history."""
+    conn = _get_db()
+    try:
+        pf = _active_portfolio(conn, name)
         rows = conn.execute(
-            """SELECT * FROM trades
-               WHERE portfolio_id = ?
-               ORDER BY executed_at DESC
-               LIMIT ?""",
-            (pf["id"], limit),
+            "SELECT * FROM trades WHERE portfolio_id = ? ORDER BY executed_at DESC LIMIT ?",
+            (pf["id"], limit)
         ).fetchall()
         return [dict(r) for r in rows]
     finally:
         conn.close()
 
 
-# ---------------------------------------------------------------------------
-# Daily snapshot
-# ---------------------------------------------------------------------------
-
-def take_snapshot(portfolio_name: str = "default") -> dict:
-    """Record a daily portfolio snapshot for performance tracking."""
-    state = get_portfolio(portfolio_name, refresh_prices=True)
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
-    conn = _get_db()
-    try:
-        pid = state["portfolio_id"]
-
-        # Get yesterday's snapshot for daily P&L
-        prev = conn.execute(
-            """SELECT total_value FROM daily_snapshots
-               WHERE portfolio_id = ? AND date < ?
-               ORDER BY date DESC LIMIT 1""",
-            (pid, today),
-        ).fetchone()
-
-        prev_value = prev["total_value"] if prev else state["starting_balance"]
-        daily_pnl = state["total_value"] - prev_value
-
-        conn.execute(
-            """INSERT OR REPLACE INTO daily_snapshots
-               (portfolio_id, date, cash_balance, positions_value,
-                total_value, daily_pnl)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (pid, today, state["cash_balance"], state["positions_value"],
-             state["total_value"], round(daily_pnl, 4)),
-        )
-        conn.commit()
-
-        return {
-            "date": today,
-            "total_value": state["total_value"],
-            "daily_pnl": round(daily_pnl, 4),
-            "cash": state["cash_balance"],
-            "positions_value": state["positions_value"],
-        }
-    finally:
-        conn.close()
-
-
-# ---------------------------------------------------------------------------
-# Formatting helpers
-# ---------------------------------------------------------------------------
-
-def _format_portfolio(pf: dict) -> str:
-    """Format portfolio state for human-readable output."""
-    lines = [
-        f"=== Portfolio: {pf['name']} ===",
-        f"Starting Balance:  ${pf['starting_balance']:>10,.2f}",
-        f"Cash Balance:      ${pf['cash_balance']:>10,.2f}",
-        f"Positions Value:   ${pf['positions_value']:>10,.2f}",
-        f"Total Value:       ${pf['total_value']:>10,.2f}",
-        f"P&L:               ${pf['pnl']:>10,.2f} ({pf['pnl_pct']:+.2f}%)",
-        f"Peak Value:        ${pf['peak_value']:>10,.2f}",
-        f"Drawdown:          {pf['drawdown_pct']:>10.2f}%",
-        f"Open Positions:    {pf['num_open_positions']:>10d}",
-        f"Created:           {pf['created_at']}",
+def _format_portfolio(p: dict) -> str:
+    out = [
+        f"=== Portfolio: {p['name']} ===",
+        f"Starting Balance:  $ {p['starting_balance']:10,.2f}",
+        f"Cash Balance:      $ {p['cash_balance']:10,.2f}",
+        f"Positions Value:   $ {p['positions_value']:10,.2f}",
+        f"Total Value:       $ {p['total_value']:10,.2f}",
+        f"P&L:               $ {p['pnl']:10,.2f} ({p['pnl_pct']:+.2f}%)",
+        f"Drawdown:                {p['drawdown_pct']:>9.2f}%",
+        f"Open Positions:             {p['num_open_positions']}",
+        f"Created:           {p['created_at']}",
     ]
-    if pf["positions"]:
-        lines.append("\n--- Open Positions ---")
-        for p in pf["positions"]:
-            pnl_str = f"${p['unrealized_pnl']:+,.2f}"
-            lines.append(
-                f"  {p['side']:>3} {p['shares']:>8.2f} shares @ "
-                f"${p['avg_entry']:.4f} -> ${p['current_price']:.4f}  "
-                f"P&L: {pnl_str}"
+    if p["positions"]:
+        out.append("--- Open Positions ---")
+        for pos in p["positions"]:
+            out.append(
+                f"  {pos['side']:3} {pos['shares']:8.2f} shares @ ${pos['avg_entry']:.4f} -> ${pos['current_price']:.4f}  P&L: ${pos['unrealized_pnl']:+,.2f}"
             )
-            if p["market_question"]:
-                lines.append(f"      {p['market_question'][:70]}")
-    return "\n".join(lines)
+            out.append(f"      {pos['market_question']}")
+    return "\n".join(out)
 
 
-def _format_trades(trades: list[dict]) -> str:
-    """Format trade list for human-readable output."""
-    if not trades:
-        return "No trades recorded."
-    lines = ["=== Trade History ==="]
+def _format_trades(trades: list) -> str:
+    if not trades: return "No trades found."
+    out = ["--- Trade History ---"]
     for t in trades:
-        lines.append(
-            f"  [{t['executed_at'][:19]}] {t['action']:>4} {t['side']:>3} "
-            f"{t['shares']:>8.2f} @ ${t['price']:.4f} "
-            f"(cost: ${t['total_cost']:.2f}, fee: ${t['fee']:.2f})"
+        out.append(
+            f"{t['executed_at'][:19]} | {t['action']:4} {t['side']:3} | {t['shares']:8.2f} @ ${t['price']:.4f} | Cost: ${t['total_cost']:8.2f} | {t['market_question'][:40]}"
         )
-        if t.get("market_question"):
-            lines.append(f"    {t['market_question'][:70]}")
-        if t.get("reasoning"):
-            lines.append(f"    Reason: {t['reasoning'][:70]}")
-    return "\n".join(lines)
+    return "\n".join(out)
 
-
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Polymarket Paper Trading Engine",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  %(prog)s --action init --balance 1000
-  %(prog)s --action buy --token TOKEN_ID --side YES --size 50
-  %(prog)s --action sell --token TOKEN_ID --side YES --size 50
-  %(prog)s --action close --token TOKEN_ID
-  %(prog)s --action portfolio
-  %(prog)s --action trades
-  %(prog)s --action snapshot
-        """,
-    )
-    parser.add_argument("--action", required=True,
-                        choices=["init", "buy", "sell", "close",
-                                 "portfolio", "trades", "snapshot"],
-                        help="Action to perform")
-    parser.add_argument("--balance", type=float, default=DEFAULT_BALANCE,
-                        help="Starting balance (init only)")
-    parser.add_argument("--name", default="default",
-                        help="Portfolio name")
+    parser = argparse.ArgumentParser(description="Polymarket Paper Trading Engine")
+    parser.add_argument("--action", choices=["init", "buy", "sell", "close", "portfolio", "trades", "snapshot"], required=True)
+    parser.add_argument("--balance", type=float, default=DEFAULT_BALANCE)
+    parser.add_argument("--name", default="default")
     parser.add_argument("--token", help="CLOB token ID")
-    parser.add_argument("--side", choices=["YES", "NO", "yes", "no"],
-                        help="Trade side")
-    parser.add_argument("--size", type=float, help="Trade size in USD")
-    parser.add_argument("--price", type=float, default=None,
-                        help="Limit price (omit for market order)")
-    parser.add_argument("--reason", default="", help="Trade reasoning")
-    parser.add_argument("--fee-rate", type=float, default=DEFAULT_FEE_RATE,
-                        help="Fee rate override")
-    parser.add_argument("--force", action="store_true",
-                        help="Skip risk checks")
-    parser.add_argument("--json", action="store_true",
-                        help="Output as JSON")
-    parser.add_argument("--limit", type=int, default=50,
-                        help="Max trades to show")
-
+    parser.add_argument("--side", choices=["YES", "NO", "yes", "no"])
+    parser.add_argument("--size", type=float)
+    parser.add_argument("--price", type=float)
+    parser.add_argument("--reason", default="")
+    parser.add_argument("--fee-rate", type=float, default=DEFAULT_FEE_RATE)
+    parser.add_argument("--force", action="store_true")
+    parser.add_argument("--json", action="store_true")
+    parser.add_argument("--limit", type=int, default=50)
     args = parser.parse_args()
 
     try:
         if args.action == "init":
-            result = init_portfolio(args.balance, args.name)
-            if args.json:
-                print(json.dumps(result, indent=2))
-            else:
-                print(f"Portfolio '{result['name']}' initialized with "
-                      f"${result['starting_balance']:,.2f}")
-
+            res = init_portfolio(args.balance, args.name)
+            print(json.dumps(res, indent=2) if args.json else f"Portfolio '{res['name']}' initialized.")
         elif args.action in ("buy", "sell"):
-            if not args.token:
-                parser.error("--token is required for buy/sell")
-            if not args.side:
-                parser.error("--side is required for buy/sell")
-            if not args.size:
-                parser.error("--size is required for buy/sell")
-
-            result = place_order(
-                token_id=args.token,
-                side=args.side.upper(),
-                size=args.size,
-                price=args.price,
-                reasoning=args.reason,
-                portfolio_name=args.name,
-                fee_rate=args.fee_rate,
-                force=args.force,
-            )
-            if args.json:
-                print(json.dumps(result, indent=2))
-            else:
-                print(
-                    f"{result['action']} {result['side']} "
-                    f"{result['shares']:.2f} shares @ "
-                    f"${result['avg_price']:.4f}\n"
-                    f"Market: {result['market']}\n"
-                    f"Total cost: ${result['total_cost']:.2f} "
-                    f"(fee: ${result['fee']:.2f})\n"
-                    f"New balance: ${result['new_balance']:.2f}"
-                )
-
+            if not args.token or not args.side or not args.size:
+                parser.error("--token, --side, and --size required")
+            res = place_order(args.token, args.side, args.size, args.price, args.reason, args.name, args.fee_rate, args.force)
+            print(json.dumps(res, indent=2) if args.json else f"Filled {res['action']} {res['side']} {res['shares']} shares.")
         elif args.action == "close":
-            if not args.token:
-                parser.error("--token is required for close")
-            result = close_position(
-                token_id=args.token,
-                side=args.side.upper() if args.side else None,
-                portfolio_name=args.name,
-                fee_rate=args.fee_rate,
-                reasoning=args.reason,
-            )
-            if args.json:
-                print(json.dumps(result, indent=2))
-            else:
-                if isinstance(result, list):
-                    for r in result:
-                        print(
-                            f"Closed {r['side']} position: "
-                            f"{r['shares_sold']:.2f} shares @ "
-                            f"${r['avg_sell_price']:.4f}\n"
-                            f"Realized P&L: ${r['realized_pnl']:+,.2f}\n"
-                            f"New balance: ${r['new_balance']:.2f}"
-                        )
-                else:
-                    print(
-                        f"Closed {result['side']} position: "
-                        f"{result['shares_sold']:.2f} shares @ "
-                        f"${result['avg_sell_price']:.4f}\n"
-                        f"Realized P&L: ${result['realized_pnl']:+,.2f}\n"
-                        f"New balance: ${result['new_balance']:.2f}"
-                    )
-
+            if not args.token: parser.error("--token required")
+            res = close_position(args.token, args.side, args.name, args.fee_rate, args.reason)
+            print(json.dumps(res, indent=2) if args.json else "Position closed.")
         elif args.action == "portfolio":
-            result = get_portfolio(args.name, refresh_prices=True)
-            if args.json:
-                print(json.dumps(result, indent=2))
-            else:
-                print(_format_portfolio(result))
-
+            res = get_portfolio(args.name)
+            print(json.dumps(res, indent=2) if args.json else _format_portfolio(res))
         elif args.action == "trades":
-            result = get_trades(args.name, args.limit)
-            if args.json:
-                print(json.dumps(result, indent=2, default=str))
-            else:
-                print(_format_trades(result))
-
+            res = get_trades(args.name, args.limit)
+            print(json.dumps(res, indent=2) if args.json else _format_trades(res))
         elif args.action == "snapshot":
-            result = take_snapshot(args.name)
-            if args.json:
-                print(json.dumps(result, indent=2))
-            else:
-                print(
-                    f"Snapshot for {result['date']}: "
-                    f"${result['total_value']:,.2f} "
-                    f"(daily P&L: ${result['daily_pnl']:+,.2f})"
-                )
-
-    except (RuntimeError, ValueError) as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
+            res = take_snapshot(args.name)
+            print(json.dumps(res, indent=2) if args.json else f"Snapshot for {res['date']} taken.")
+    except Exception as e:
+        print(f"ERROR: {e}", file=sys.stderr)
         sys.exit(1)
 
 

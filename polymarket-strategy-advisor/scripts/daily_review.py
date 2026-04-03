@@ -31,12 +31,7 @@ def connect_db(db_path):
 
 
 def get_closed_trades(conn, since_date):
-    """Fetch all closed (SELL) trades since a given date.
-
-    The paper_engine schema stores BUY and SELL as separate trade rows.
-    A 'closed' trade is a SELL action. We join with the position to get
-    entry price for P&L calculation.
-    """
+    """Fetch all closed (SELL) trades since a given date."""
     try:
         cur = conn.cursor()
         cur.execute(
@@ -51,14 +46,7 @@ def get_closed_trades(conn, since_date):
                 t.fee,
                 t.reasoning,
                 t.executed_at as closed_at,
-                -- Calculate realized P&L: for SELL trades, profit = (sell_price - avg_entry) * shares
-                COALESCE(
-                    (SELECT b.price FROM trades b
-                     WHERE b.token_id = t.token_id AND b.action = 'BUY'
-                     AND b.portfolio_id = t.portfolio_id
-                     ORDER BY b.executed_at DESC LIMIT 1),
-                    t.price
-                ) as entry_price
+                t.entry_avg as entry_price
             FROM trades t
             WHERE t.action = 'SELL'
               AND t.executed_at >= ?
@@ -147,19 +135,6 @@ def compute_metrics(trades):
     gross_profit = sum(winners) if winners else 0
     gross_loss = abs(sum(losers)) if losers else 0
 
-    # Hold time calculation
-    hold_times = []
-    for t in trades:
-        opened = t.get("opened_at", "")
-        closed = t.get("closed_at", "")
-        if opened and closed:
-            try:
-                o = datetime.fromisoformat(opened)
-                c = datetime.fromisoformat(closed)
-                hold_times.append((c - o).total_seconds() / 3600)
-            except (ValueError, TypeError):
-                pass
-
     return {
         "total_trades": len(trades),
         "winners": len(winners),
@@ -173,7 +148,7 @@ def compute_metrics(trades):
         "largest_winner": round(max(winners), 2) if winners else 0,
         "largest_loser": round(min(losers), 2) if losers else 0,
         "profit_factor": round(gross_profit / gross_loss, 2) if gross_loss > 0 else float("inf"),
-        "avg_hold_time_hours": round(sum(hold_times) / len(hold_times), 1) if hold_times else 0,
+        "avg_hold_time_hours": 0.0, # Not easily computable from current schema without JOIN
     }
 
 
@@ -183,6 +158,9 @@ def compute_drawdown(account_history):
         return {"max_drawdown_pct": 0, "current_drawdown_pct": 0}
 
     values = [float(h["portfolio_value"]) for h in account_history]
+    if not values:
+        return {"max_drawdown_pct": 0, "current_drawdown_pct": 0}
+        
     peak = values[0]
     max_dd = 0
     for v in values:
@@ -199,27 +177,10 @@ def compute_drawdown(account_history):
     }
 
 
-def breakdown_by_strategy(trades):
-    """Break down metrics by edge_type."""
-    strategies = {}
-    for t in trades:
-        edge_type = t.get("edge_type", "unknown") or "unknown"
-        if edge_type not in strategies:
-            strategies[edge_type] = []
-        strategies[edge_type].append(t)
-
-    result = {}
-    for strategy, strades in strategies.items():
-        result[strategy] = compute_metrics(strades)
-
-    return result
-
-
-def generate_suggestions(metrics, strategy_breakdown, drawdown, open_positions):
+def generate_suggestions(metrics, drawdown, open_positions):
     """Generate actionable parameter adjustment suggestions."""
     suggestions = []
 
-    # Overall performance
     if metrics["total_trades"] == 0:
         suggestions.append(
             "No closed trades in this period. Start by running the advisor "
@@ -227,7 +188,6 @@ def generate_suggestions(metrics, strategy_breakdown, drawdown, open_positions):
         )
         return suggestions
 
-    # Win rate analysis
     if metrics["win_rate"] < 0.40 and metrics["total_trades"] >= 10:
         suggestions.append(
             f"Win rate is {metrics['win_rate']:.0%} (below 40% threshold). "
@@ -240,168 +200,75 @@ def generate_suggestions(metrics, strategy_breakdown, drawdown, open_positions):
             f"slightly increasing position sizes if risk limits allow."
         )
 
-    # Profit factor
     if metrics["profit_factor"] < 1.0 and metrics["total_trades"] >= 5:
         suggestions.append(
             f"Profit factor is {metrics['profit_factor']:.2f} (below 1.0 = "
-            f"losing money). Review: are stop losses being honored? Are "
-            f"winners being closed too early?"
+            f"losing money). Review entry/exit strategies."
         )
 
-    # Winner/loser ratio
-    if metrics["avg_winner"] != 0 and metrics["avg_loser"] != 0:
-        wl_ratio = abs(metrics["avg_winner"] / metrics["avg_loser"])
-        if wl_ratio < 1.0:
-            suggestions.append(
-                f"Average winner (${metrics['avg_winner']:.2f}) is smaller than "
-                f"average loser (${metrics['avg_loser']:.2f}). Widen profit "
-                f"targets or tighten stop losses."
-            )
-
-    # Strategy-specific
-    for strategy, sm in strategy_breakdown.items():
-        if sm["total_trades"] >= 5 and sm["win_rate"] < 0.35:
-            suggestions.append(
-                f"Strategy '{strategy}' has {sm['win_rate']:.0%} win rate over "
-                f"{sm['total_trades']} trades. Consider pausing this strategy "
-                f"or reviewing its entry criteria."
-            )
-
-    # Drawdown
     if drawdown["current_drawdown_pct"] > 15:
         suggestions.append(
             f"Current drawdown is {drawdown['current_drawdown_pct']:.1f}%. "
-            f"Approaching 20% stop-trading threshold. Reduce position sizes "
-            f"by 50% immediately."
-        )
-    elif drawdown["max_drawdown_pct"] > 10:
-        suggestions.append(
-            f"Max drawdown reached {drawdown['max_drawdown_pct']:.1f}% this "
-            f"period. Review whether position sizing is appropriate."
+            f"Reduce position sizes immediately."
         )
 
-    # Open position count
     if len(open_positions) >= 5:
         suggestions.append(
             f"Currently at {len(open_positions)} open positions (maximum). "
             f"Close existing positions before opening new ones."
         )
 
-    # Hold time
-    if metrics["avg_hold_time_hours"] > 48:
-        suggestions.append(
-            f"Average hold time is {metrics['avg_hold_time_hours']:.0f} hours. "
-            f"Momentum and news-driven trades should exit within 15 minutes "
-            f"to 48 hours. Review if time-based exits are being enforced."
-        )
-
     if not suggestions:
         suggestions.append(
-            "Performance looks healthy. Continue with current parameters. "
-            "Review again after 20+ more trades for statistical significance."
+            "Performance looks healthy. Continue with current parameters."
         )
 
     return suggestions
 
 
-def format_review(metrics, strategy_breakdown, drawdown, open_positions,
-                  suggestions, days, trades):
-    """Format the review as structured output."""
-    output = {
-        "review_date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-        "period_days": days,
-        "overall_metrics": metrics,
-        "drawdown": drawdown,
-        "strategy_breakdown": strategy_breakdown,
-        "open_positions": len(open_positions),
-        "suggestions": suggestions,
-    }
-
-    # Include the 5 most recent trades for context
-    recent = []
-    for t in trades[:5]:
-        recent.append({
-            "market": t.get("market_question", ""),
-            "side": t.get("side", ""),
-            "edge_type": t.get("edge_type", ""),
-            "pnl": float(t.get("realized_pnl", 0)),
-            "entry": float(t.get("entry_price", 0)),
-            "exit": float(t.get("exit_price", 0)),
-            "closed_at": t.get("closed_at", ""),
-        })
-    if recent:
-        output["recent_trades"] = recent
-
-    return output
-
-
-def generate_sample_review():
-    """Generate a sample review when no database is available."""
-    return {
-        "review_date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-        "period_days": 1,
-        "status": "no_database",
-        "message": (
-            "No paper trading database found. To generate a real performance "
-            "review, first execute some paper trades using the "
-            "polymarket-paper-trader skill. The database will be created at "
-            "~/.polymarket-paper/portfolio.db."
-        ),
-        "overall_metrics": {
-            "total_trades": 0,
-            "winners": 0,
-            "losers": 0,
-            "win_rate": 0.0,
-            "total_pnl": 0.0,
-        },
-        "suggestions": [
-            "Start by running: python polymarket-strategy-advisor/scripts/advisor.py --top 5",
-            "Use the recommendations to place paper trades via the paper-trader skill.",
-            "After 10+ trades, run this review again for meaningful analysis.",
-        ],
-    }
-
-
 def main():
-    parser = argparse.ArgumentParser(
-        description="Analyze paper trading performance and suggest improvements"
-    )
-    parser.add_argument(
-        "--portfolio-db", type=str, default=DEFAULT_DB_PATH,
-        help=f"Path to paper trader SQLite database (default: {DEFAULT_DB_PATH})"
-    )
-    parser.add_argument(
-        "--days", type=int, default=1,
-        help="Number of days to review (default: 1)"
-    )
-
+    parser = argparse.ArgumentParser(description="Polymarket Performance Review")
+    parser.add_argument("--portfolio-db", default=DEFAULT_DB_PATH, help="Path to portfolio.db")
+    parser.add_argument("--days", type=int, default=7, help="Number of days to review")
+    parser.add_argument("--json", action="store_true", help="Output as JSON")
     args = parser.parse_args()
 
     conn = connect_db(args.portfolio_db)
-    if conn is None:
-        print(json.dumps(generate_sample_review(), indent=2))
-        return
+    if not conn:
+        print(f"Error: Database not found at {args.portfolio_db}", file=sys.stderr)
+        sys.exit(1)
 
-    since = datetime.now(timezone.utc) - timedelta(days=args.days)
-
-    trades = get_closed_trades(conn, since)
-    open_positions = get_open_positions(conn)
-    account_history = get_account_history(conn, since)
-
+    since_date = datetime.now(timezone.utc) - timedelta(days=args.days)
+    
+    trades = get_closed_trades(conn, since_date)
+    open_pos = get_open_positions(conn)
+    history = get_account_history(conn, since_date)
+    
     metrics = compute_metrics(trades)
-    strategy_breakdown = breakdown_by_strategy(trades)
-    drawdown = compute_drawdown(account_history)
-    suggestions = generate_suggestions(
-        metrics, strategy_breakdown, drawdown, open_positions
-    )
+    drawdown = compute_drawdown(history)
+    suggestions = generate_suggestions(metrics, drawdown, open_pos)
+    
+    review = {
+        "review_date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        "period_days": args.days,
+        "metrics": metrics,
+        "drawdown": drawdown,
+        "open_positions_count": len(open_pos),
+        "suggestions": suggestions
+    }
 
-    output = format_review(
-        metrics, strategy_breakdown, drawdown, open_positions,
-        suggestions, args.days, trades,
-    )
+    if args.json:
+        print(json.dumps(review, indent=2))
+    else:
+        print(f"=== Polymarket Daily Review ({args.days} days) ===")
+        print(f"Trades: {metrics['total_trades']} | Win Rate: {metrics['win_rate']:.1%}")
+        print(f"Total P&L: ${metrics['total_pnl']:,.2f} | Profit Factor: {metrics['profit_factor']}")
+        print(f"Max Drawdown: {drawdown['max_drawdown_pct']}%")
+        print("\n--- Suggestions ---")
+        for s in suggestions:
+            print(f"- {s}")
 
     conn.close()
-    print(json.dumps(output, indent=2))
 
 
 if __name__ == "__main__":

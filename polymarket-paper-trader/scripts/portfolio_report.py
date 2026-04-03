@@ -15,10 +15,11 @@ import json
 import math
 import sqlite3
 import sys
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-import os
+# Import from paper_engine (same directory)
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 if _THIS_DIR not in sys.path:
     sys.path.append(_THIS_DIR)
@@ -303,158 +304,114 @@ def _daily_returns(
     return returns
 
 
-def _sharpe_ratio(
-    daily_returns: list[float],
-    risk_free_daily: float = 0.0001,  # ~3.7% annual
-) -> float:
-    """Annualized Sharpe ratio from daily returns."""
-    if len(daily_returns) < 2:
+def _sharpe_ratio(returns: list[float], risk_free_rate: float = 0.0) -> float:
+    """Compute annualized Sharpe ratio (assumes daily data)."""
+    if len(returns) < 2:
         return 0.0
-
-    excess = [r - risk_free_daily for r in daily_returns]
-    mean_excess = sum(excess) / len(excess)
-    variance = sum((r - mean_excess) ** 2 for r in excess) / (len(excess) - 1)
-    std = math.sqrt(variance) if variance > 0 else 0
-
-    if std == 0:
+    import statistics
+    avg_return = statistics.mean(returns)
+    std_dev = statistics.stdev(returns)
+    if std_dev == 0:
         return 0.0
-    return (mean_excess / std) * math.sqrt(252)
+    return (avg_return - (risk_free_rate / 365.25)) / std_dev * math.sqrt(365.25)
 
 
-def _sortino_ratio(
-    daily_returns: list[float],
-    risk_free_daily: float = 0.0001,
-) -> float:
-    """Annualized Sortino ratio (uses downside deviation only)."""
-    if len(daily_returns) < 2:
+def _sortino_ratio(returns: list[float], risk_free_rate: float = 0.0) -> float:
+    """Compute annualized Sortino ratio (assumes daily data)."""
+    if len(returns) < 2:
         return 0.0
-
-    excess = [r - risk_free_daily for r in daily_returns]
-    mean_excess = sum(excess) / len(excess)
-
-    downside = [min(0, r) ** 2 for r in excess]
-    downside_dev = math.sqrt(sum(downside) / len(downside)) if downside else 0
-
-    if downside_dev == 0:
+    import statistics
+    avg_return = statistics.mean(returns)
+    downside_returns = [r for r in returns if r < 0]
+    if not downside_returns:
+        return float("inf") if avg_return > 0 else 0.0
+    downside_std = math.sqrt(sum(r**2 for r in downside_returns) / len(returns))
+    if downside_std == 0:
         return 0.0
-    return (mean_excess / downside_dev) * math.sqrt(252)
+    return (avg_return - (risk_free_rate / 365.25)) / downside_std * math.sqrt(365.25)
 
 
-def _trade_summary(trade: dict) -> dict:
-    """Compact summary of a closed trade for reporting."""
+def _trade_summary(t: dict) -> dict:
+    """Compact summary for best/worst trades."""
     return {
-        "market": trade.get("market", "")[:70],
-        "side": trade["side"],
-        "shares": trade["shares"],
-        "entry": trade["entry_price"],
-        "exit": trade["exit_price"],
-        "pnl_usd": trade["pnl"],
-        "pnl_pct": trade["pnl_pct"],
-        "duration": trade.get("close_time", ""),
+        "market": t["market"],
+        "side": t["side"],
+        "pnl": t["pnl"],
+        "pnl_pct": t["pnl_pct"],
+        "duration_hours": round(
+            (datetime.fromisoformat(t["close_time"].replace("Z", "+00:00")) -
+             datetime.fromisoformat(t["open_time"].replace("Z", "+00:00"))).total_seconds() / 3600,
+            1
+        ) if t.get("open_time") and t.get("close_time") else 0
     }
 
 
-# ---------------------------------------------------------------------------
-# Text formatting
-# ---------------------------------------------------------------------------
-
-def format_report(report: dict) -> str:
-    """Format the report as human-readable text."""
+def _format_report(report: dict) -> str:
+    """Format report dict as readable text."""
     s = report["summary"]
     r = report["risk_metrics"]
     t = report["trade_metrics"]
 
-    lines = [
-        "=" * 60,
-        f"  PORTFOLIO REPORT: {report['portfolio_name']}",
-        f"  Generated: {report['generated_at'][:19]}",
-        f"  Active for: {report['days_active']} days",
-        "=" * 60,
+    out = [
+        f"=== Portfolio Report: {report['portfolio_name']} ===",
+        f"Generated: {report['generated_at']}",
+        f"Days Active: {report['days_active']}",
         "",
-        "--- Performance Summary ---",
-        f"  Starting Balance:     ${s['starting_balance']:>12,.2f}",
-        f"  Current Value:        ${s['current_value']:>12,.2f}",
-        f"  Total Return:         ${s['total_return_usd']:>12,.2f} "
-        f"({s['total_return_pct']:+.2f}%)",
-        f"  Annualized Return:    {s['annualized_return_pct']:>12.2f}%",
+        "--- Summary ---",
+        f"Starting Balance: ${s['starting_balance']:,.2f}",
+        f"Current Value:    ${s['current_value']:,.2f}",
+        f"Total Return:     ${s['total_return_usd']:+,.2f} ({s['total_return_pct']:+.2f}%)",
+        f"Annualized:       {s['annualized_return_pct']:+.2f}%",
         "",
         "--- Risk Metrics ---",
-        f"  Sharpe Ratio:         {r['sharpe_ratio']:>12.3f}",
-        f"  Sortino Ratio:        {r['sortino_ratio']:>12.3f}",
-        f"  Max Drawdown:         {r['max_drawdown_pct']:>12.2f}%",
-        f"  Max DD Duration:      {r['max_drawdown_duration_days']:>12d} days",
-        f"  Current Drawdown:     {r['current_drawdown_pct']:>12.2f}%",
+        f"Sharpe Ratio:     {r['sharpe_ratio']}",
+        f"Sortino Ratio:    {r['sortino_ratio']}",
+        f"Max Drawdown:     {r['max_drawdown_pct']}%",
+        f"Max DD Duration:  {r['max_drawdown_duration_days']} days",
         "",
         "--- Trade Metrics ---",
-        f"  Total Trades:         {t['total_trades']:>12d}",
-        f"  Closed Trades:        {t['closed_trades']:>12d}",
-        f"  Open Positions:       {t['open_positions']:>12d}",
-        f"  Win Rate:             {t['win_rate_pct']:>12.1f}%",
-        f"  Avg Win:              ${t['avg_win_usd']:>12,.2f}",
-        f"  Avg Loss:             ${t['avg_loss_usd']:>12,.2f}",
-        f"  Profit Factor:        {t['profit_factor']:>12.2f}",
-        f"  Total Fees:           ${t['total_fees_usd']:>12,.2f}",
-        f"  Avg Trade Duration:   {t['avg_trade_duration_hours']:>12.1f} hours",
+        f"Total Trades:     {t['total_trades']} ({t['closed_trades']} closed)",
+        f"Win Rate:         {t['win_rate_pct']}%",
+        f"Profit Factor:    {t['profit_factor']}",
+        f"Avg Win/Loss:     ${t['avg_win_usd']:,.2f} / ${t['avg_loss_usd']:,.2f}",
+        f"Avg Duration:     {t['avg_trade_duration_hours']} hours",
+        f"Total Fees:       ${t['total_fees_usd']:,.2f}",
+        "",
     ]
 
     if report["best_trades"]:
-        lines += ["", "--- Best Trades ---"]
-        for i, bt in enumerate(report["best_trades"], 1):
-            lines.append(
-                f"  {i}. {bt['side']} {bt['shares']:.1f}sh "
-                f"${bt['entry']:.4f}->${bt['exit']:.4f} "
-                f"P&L: ${bt['pnl_usd']:+,.2f} ({bt['pnl_pct']:+.1f}%)"
-            )
-            if bt.get("market"):
-                lines.append(f"     {bt['market']}")
+        out.append("--- Best Trades ---")
+        for bt in report["best_trades"]:
+            out.append(f"  {bt['pnl_pct']:+6.1f}% | ${bt['pnl']:+8.2f} | {bt['market'][:50]}")
+        out.append("")
 
     if report["worst_trades"]:
-        lines += ["", "--- Worst Trades ---"]
-        for i, wt in enumerate(report["worst_trades"], 1):
-            lines.append(
-                f"  {i}. {wt['side']} {wt['shares']:.1f}sh "
-                f"${wt['entry']:.4f}->${wt['exit']:.4f} "
-                f"P&L: ${wt['pnl_usd']:+,.2f} ({wt['pnl_pct']:+.1f}%)"
-            )
-            if wt.get("market"):
-                lines.append(f"     {wt['market']}")
+        out.append("--- Worst Trades ---")
+        for wt in report["worst_trades"]:
+            out.append(f"  {wt['pnl_pct']:+6.1f}% | ${wt['pnl']:+8.2f} | {wt['market'][:50]}")
+        out.append("")
 
     if report["open_positions"]:
-        lines += ["", "--- Open Positions ---"]
+        out.append("--- Open Positions ---")
         for p in report["open_positions"]:
-            lines.append(
-                f"  {p['side']} {p['shares']:.1f}sh "
-                f"@ ${p['entry']:.4f} -> ${p['current']:.4f} "
-                f"P&L: ${p['unrealized_pnl']:+,.2f}"
-            )
-            if p.get("market"):
-                lines.append(f"     {p['market']}")
+            out.append(f"  {p['side']:3} | {p['shares']:8.2f} | P&L: ${p['unrealized_pnl']:+8.2f} | {p['market'][:50]}")
 
-    lines.append("")
-    lines.append("=" * 60)
-    return "\n".join(lines)
+    return "\n".join(out)
 
-
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Generate portfolio performance report",
-    )
-    parser.add_argument("--portfolio", default="default", help="Portfolio name")
-    parser.add_argument("--json", action="store_true", help="JSON output")
-
+    parser = argparse.ArgumentParser(description="Generate portfolio performance report")
+    parser.add_argument("--name", default="default", help="Portfolio name")
+    parser.add_argument("--json", action="store_true", help="Output as JSON")
     args = parser.parse_args()
 
     try:
-        report = generate_report(args.portfolio)
+        report = generate_report(args.name)
         if args.json:
             print(json.dumps(report, indent=2))
         else:
-            print(format_report(report))
-    except RuntimeError as exc:
+            print(_format_report(report))
+    except (RuntimeError, ValueError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(1)
 

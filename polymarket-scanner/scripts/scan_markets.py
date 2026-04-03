@@ -14,10 +14,20 @@ MAX_TEXT_LEN = 200
 
 
 def sanitize_text(text):
-    """Strip control characters and limit length. Market text is user-generated."""
+    """
+    Strip control characters and limit length. Market text is user-generated.
+    Also escapes sequences that could be used for prompt injection.
+    """
     if not text:
         return ""
+    # Strip control characters
     text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text)
+    
+    # Escape common LLM delimiter tags to prevent prompt injection
+    text = text.replace("<|", "&lt;|").replace("|>", "|&gt;")
+    text = text.replace("</output>", "&lt;/output&gt;")
+    text = text.replace("IGNORE ALL PREVIOUS INSTRUCTIONS", "[REDACTED INSTRUCTION]")
+    
     if len(text) > MAX_TEXT_LEN:
         text = text[:MAX_TEXT_LEN] + "..."
     return text
@@ -132,7 +142,10 @@ def main():
             sort_by=args.sort_by,
             ascending=args.ascending,
         )
+        # Add explicit data delimiters for AI safety
+        print("[MARKET_DATA_START]")
         print(json.dumps(markets, indent=2))
+        print("[MARKET_DATA_END]")
     except requests.RequestException as e:
         print(json.dumps({"error": str(e)}), file=sys.stderr)
         sys.exit(1)

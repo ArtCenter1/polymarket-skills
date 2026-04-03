@@ -1,0 +1,17 @@
+=== Portfolio: default ===
+Starting Balance:  $  1,000.00
+Cash Balance:      $    999.25
+Positions Value:   $      0.00
+Total Value:       $    999.25
+P&L:               $     -0.75 (-0.07%)
+Peak Value:        $  1,000.00
+Drawdown:                0.07%
+Open Positions:             0
+Created:           2026-04-03T05:44:38.536570+00:00
+=== Trade History ===
+  [2026-04-03T05:44:52] SELL YES    74.63 @ $0.6600 (cost: $49.25, fee: $0.00)
+    US forces enter Iran by April 30?
+    Reason: Test close
+  [2026-04-03T05:44:42]  BUY YES    74.63 @ $0.6700 (cost: $50.00, fee: $0.00)
+    US forces enter Iran by April 30?
+    Reason: Test buy
