@@ -264,6 +264,42 @@ python scripts/setup_wallet.py --check-balance
 
 No official Polymarket testnet exists. The paper trading engine simulates execution against real live prices.
 
+## Proxy & Network Bypass
+
+Polymarket APIs may be DNS-blocked in certain regions (e.g. Taiwan). All scripts
+support proxy and SSL bypass via environment variables:
+
+| Variable | Example | Description |
+|----------|---------|-------------|
+| `HTTP_PROXY` | `http://127.0.0.1:7890` | HTTP proxy URL |
+| `HTTPS_PROXY` | `http://127.0.0.1:7890` | HTTPS proxy URL (takes priority over HTTP_PROXY) |
+| `POLYMARKET_SSL_VERIFY` | `false` | Disable SSL verification (useful with proxy) |
+
+### Usage
+
+```bash
+# With SOCKS5/HTTP proxy (e.g. VPN on localhost:7890)
+export HTTPS_PROXY=http://127.0.0.1:7890
+export POLYMARKET_SSL_VERIFY=false
+
+python polymarket-scanner/scripts/scan_markets.py --limit 10
+
+# Or inline:
+HTTPS_PROXY=http://127.0.0.1:7890 POLYMARKET_SSL_VERIFY=false \
+  python polymarket-scanner/scripts/scan_markets.py --limit 10
+```
+
+### How It Works
+
+The shared `polymarket_common/connectivity.py` module (imported by all scripts)
+applies proxy and SSL settings to all three HTTP backends used in this repo:
+
+- **requests** library — patches `Session.request` with proxy and `verify=False`
+- **urllib** (stdlib) — installs a custom opener with `ProxyHandler` + SSL bypass
+- **py_clob_client** (httpx) — replaces the module-level `httpx.Client` singleton
+
+When no environment variables are set, existing behavior is fully preserved (backward compatible).
+
 ## Data Storage
 
 | Location | Contents |

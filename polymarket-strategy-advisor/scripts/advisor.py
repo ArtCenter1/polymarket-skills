@@ -21,6 +21,9 @@ from datetime import datetime, timezone
 
 import requests
 
+# Proxy/SSL bypass for restricted networks (e.g. Taiwan DNS block)
+import os as _os; _REPO = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))); _REPO not in sys.path and sys.path.insert(0, _REPO); import polymarket_common.connectivity  # noqa: F401
+
 GAMMA_API = "https://gamma-api.polymarket.com"
 CLOB_API = "https://clob.polymarket.com"
 
