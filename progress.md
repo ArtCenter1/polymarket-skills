@@ -20,4 +20,7 @@
 - [2026-07-01] All 20 Python files checked with `py_compile` — zero syntax errors
 
 ## Git & PR
-- Pending
+- [2026-07-01] Commit 1: `docs: standardize venv activation and setup commands for Windows + POSIX`
+- [2026-07-01] Commit 2: `chore: add planning and findings docs for windows compatibility audit`
+- [2026-07-01] Pushed to `origin/feature/issue-3-windows-compat`
+- [2026-07-01] **PR #5 created**: https://github.com/ArtCenter1/polymarket-skills/pull/5
