@@ -94,7 +94,10 @@ For full entry/exit decision trees and stop-loss math, see `polymarket-strategy-
 
 ### Session Start
 
-1. Activate venv: `source ~/.venv/bin/activate`
+1. Activate venv:
+   - **Linux/Mac:** `source ~/.venv/bin/activate`
+   - **Windows (git-bash):** `source .venv/Scripts/activate`
+   - **Windows (CMD/PowerShell):** `.venv\Scripts\activate`
 2. Check portfolio state:
    ```
    python polymarket-paper-trader/scripts/paper_engine.py --action portfolio
@@ -229,7 +232,12 @@ Scanner ──→ Analyzer ──→ Strategy Advisor ──→ Paper Trader ─
 | Simulate trades | polymarket-paper-trader | `paper_engine.py`, `execute_paper.py`, `portfolio_report.py` |
 | Execute real trades | polymarket-live-executor | `execute_live.py`, `check_positions.py` |
 
-All scripts are in `<skill>/scripts/` and require the Python venv: `source ~/.venv/bin/activate`
+All scripts are in `<skill>/scripts/` and require the Python venv:
+
+**Activate venv:**
+- **Linux/Mac:** `source ~/.venv/bin/activate`
+- **Windows (git-bash):** `source .venv/Scripts/activate`
+- **Windows (CMD/PowerShell):** `.venv\Scripts\activate`
 
 All API calls use:
 - **Gamma API** (`gamma-api.polymarket.com`) — market metadata, zero auth

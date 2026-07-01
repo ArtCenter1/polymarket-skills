@@ -51,7 +51,13 @@ Once installed, talk to your agent naturally:
 ### Full Pipeline
 
 ```bash
+# Activate virtual environment
+# Linux/Mac:
 source ~/.venv/bin/activate
+# Windows (git-bash):
+# source .venv/Scripts/activate
+# Windows (CMD/PowerShell):
+# .venv\Scripts\activate
 
 # 1. Initialize portfolio
 python polymarket-paper-trader/scripts/paper_engine.py --action init --balance 1000
@@ -233,8 +239,13 @@ python scripts/setup_wallet.py --create
 cp .env.example .env && chmod 600 .env
 # Edit .env with your private key
 
-# Verify
+# Verify (load environment variables)
+# Linux/Mac:
 source .env
+# Windows (git-bash):
+# source .env
+# Windows (CMD):  (load vars manually from .env)
+# Windows (PowerShell):  (load vars manually from .env)
 python scripts/setup_wallet.py --verify
 python scripts/setup_wallet.py --check-balance
 ```
@@ -279,14 +290,26 @@ support proxy and SSL bypass via environment variables:
 
 ```bash
 # With SOCKS5/HTTP proxy (e.g. VPN on localhost:7890)
+# Linux/Mac:
 export HTTPS_PROXY=http://127.0.0.1:7890
 export POLYMARKET_SSL_VERIFY=false
+
+# Windows (CMD):
+# set HTTPS_PROXY=http://127.0.0.1:7890
+# set POLYMARKET_SSL_VERIFY=false
+
+# Windows (PowerShell):
+# $env:HTTPS_PROXY="http://127.0.0.1:7890"
+# $env:POLYMARKET_SSL_VERIFY="false"
 
 python polymarket-scanner/scripts/scan_markets.py --limit 10
 
 # Or inline:
+# Linux/Mac:
 HTTPS_PROXY=http://127.0.0.1:7890 POLYMARKET_SSL_VERIFY=false \
   python polymarket-scanner/scripts/scan_markets.py --limit 10
+# Windows (CMD):  (use set before the command, or use Anaconda Prompt)
+# set HTTPS_PROXY=http://127.0.0.1:7890 && set POLYMARKET_SSL_VERIFY=false && python polymarket-scanner/scripts/scan_markets.py --limit 10
 ```
 
 ### How It Works
