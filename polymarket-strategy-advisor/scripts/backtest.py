@@ -26,6 +26,9 @@ from datetime import datetime, timedelta, timezone
 from urllib.request import urlopen, Request
 from urllib.error import URLError, HTTPError
 
+# Proxy/SSL bypass for restricted networks (e.g. Taiwan DNS block)
+import os as _os; _REPO = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))); _REPO not in sys.path and sys.path.insert(0, _REPO); import polymarket_common.connectivity  # noqa: F401
+
 
 # ---------------------------------------------------------------------------
 # Configuration

@@ -28,9 +28,17 @@ cached_data = {
 }
 
 def run_command(cmd):
-    """Run a command and return the output"""
+    """Run a command and return the output
+    
+    Proxy/SSL env vars are automatically inherited by subprocesses:
+      HTTP_PROXY, HTTPS_PROXY, POLYMARKET_SSL_VERIFY
+    No changes needed here — the child scripts handle connectivity
+    via polymarket_common.connectivity on import.
+    """
     try:
-        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30)
+        # Pass through current environment (includes proxy/SSL vars)
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True,
+                                timeout=30, env=os.environ)
         if result.returncode == 0:
             return json.loads(result.stdout) if result.stdout.strip() else {}
         else:
