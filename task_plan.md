@@ -1,35 +1,38 @@
-# Task Plan: Issue #3 — Windows Compatibility Path Adjustments
+# Task Plan: Issue #2 - Web Frontend Security Enhancements & Proxy UI
+
+## Branch: `feature/issue-2-frontend-security-v2`
+
+## Overview
+Implement security refactoring and proxy/SSL configuration UI for `web_frontend.py`.
 
 ## Phases
 
-### Phase 0: Initialization ✅
-- [x] Checkout `main` and create `feature/issue-3-windows-compat`
-- [x] Initialize planning files (task_plan.md, findings.md, progress.md)
+### Phase 1: Initialization & Git Setup
+- [x] Checkout `main` and create new branch `feature/issue-2-frontend-security-v2`
+- [x] Initialize planning files (`task_plan.md`, `findings.md`, `progress.md`)
 
-### Phase 1: Documentation Updates ✅
-- [x] Update README.md — venv activation, setup commands for Windows + POSIX
-- [x] Update WEB_FRONTEND_README.md — verify Windows guidance already present, add any missing
-- [x] Update CLAUDE.md — Section 3 (Daily Workflow) and Section 4 (Trading Modes) venv commands
+### Phase 2: Audit Existing Code on `main`
+- [x] Verify `web_frontend.py` has no `shell=True` subprocess calls
+- [x] Verify config persistence mechanism exists
+- [x] Verify settings API endpoints exist
+- [x] Verify Settings UI in dashboard.html
+- [x] Identify any gaps or issues
 
-### Phase 2: Code Path Auditing ✅
-- [x] Scan polymarket-scanner/ scripts for hardcoded paths
-- [x] Scan polymarket-analyzer/ scripts for hardcoded paths
-- [x] Scan polymarket-paper-trader/ scripts for hardcoded paths
-- [x] Scan polymarket-strategy-advisor/ scripts for hardcoded paths
-- [x] Scan polymarket-monitor/ scripts for hardcoded paths
-- [x] Scan polymarket-live-executor/ scripts for hardcoded paths
-- [x] Scan polymarket_common/ for shared path utilities
+### Phase 3: Implementation & Improvements
+- [ ] Fix any remaining security issues found in audit
+- [ ] Add improved docstrings and comments
+- [ ] Ensure proxy/SSL env vars are properly injected for all child processes
+- [ ] Validate `build_subprocess_env()` handles all edge cases
 
-### Phase 3: Testing & Verification ✅
-- [x] Verify all markdown files render cleanly
-- [x] Check all changed Python scripts compile without syntax errors
+### Phase 4: Testing & Verification
+- [ ] Verify `web_frontend.py` compiles cleanly
+- [ ] Test config save/load round-trip
+- [ ] Verify settings API endpoints with test requests
+- [ ] Ensure background updater works correctly
 
-### Phase 4: Git Workflow & PR ✅
-- [x] Commit changes incrementally
-- [x] Push branch to remote
-- [x] Create PR referencing "Closes #3"
+### Phase 5: PR Creation
+- [ ] Commit changes incrementally
+- [ ] Push to remote
+- [ ] Create PR targeting `main` with "Closes #2"
 
-## Status Key
-- ✅ Complete
-- ⬜ Not started
-- 🔄 In progress
+## Status: IN PROGRESS

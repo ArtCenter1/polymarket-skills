@@ -1,35 +1,38 @@
-# Findings: Issue #3 — Windows Compatibility Path Adjustments
+# Findings: Issue #2 - Web Frontend Security Audit
 
-## Initial Document Scan (README.md)
+## Code Structure Analysis
 
-### venv Activation
-- **Line 54**: `source ~/.venv/bin/activate` — Linux/Mac only
-- **Missing**: Windows alternative (`.venv/Scripts/activate` or `.venv\Scripts\activate`)
+### `web_frontend.py` (main branch)
+- Safe subprocess calls via `run_command()` with `shell=False` ✓
+- Config persistence via `config.json` with `load_config()`/`save_config()` ✓
+- Settings API endpoints: `GET /api/settings`, `POST /api/settings` ✓
+- `build_subprocess_env()` injects proxy/SSL vars into child process env ✓
+- All subprocess calls go through `run_command()` → `subprocess.run(args, shell=False, env=env)` ✓
+- Uses `sys.executable` for Python script execution ✓
 
-### Setup Commands
-- **Lines 233-238**: `source .env` — bash-ism, does not work on Windows CMD/PowerShell
-  - Windows alternative: `.env.ps1` or sourcing through bash
+### `templates/dashboard.html`
+- Settings modal with HTTP_PROXY, HTTPS_PROXY inputs ✓
+- SSL Verify toggle switch ✓
+- JavaScript for loading/saving settings via API ✓
+- Toast notification for feedback ✓
+- Modal open/close via button, click outside, and Escape key ✓
 
-### Proxy/Network Section
-- **Lines 280-289**: Uses `export` bash syntax for env vars
-  - Windows CMD: `set HTTPS_PROXY=http://127.0.0.1:7890`
-  - Windows PS: `$env:HTTPS_PROXY="http://127.0.0.1:7890"`
+### `config.json`
+- Persisted config with HTTP_PROXY, HTTPS_PROXY, POLYMARKET_SSL_VERIFY ✓
 
-### Data Storage Section
-- **Lines 307-309**: Uses `~/.polymarket-paper/` paths — this is standard and works cross-platform with pathlib
+## Security Assessment
+- **No shell=True subprocess calls** - All refactored to list-based args
+- **No shell injection vectors** - Args are explicitly separated
+- **Safe env propagation** - Proxy settings are injected into env dict, not shell-escaped
+- **Config file** - JSON format, no eval/exec of user input
 
-## Initial Document Scan (WEB_FRONTEND_README.md)
-- **Lines 59-62**: Already shows both Linux/Mac and Windows venv activation — GOOD
-- **Lines 165-169**: Already shows Linux/Mac (`lsof`) and Windows (`netstat`) port commands — GOOD
-- Rest of file is generally cross-platform compatible
+## UI Design
+- Tailwind CSS theme matching existing dashboard
+- Clean form layout with labels, placeholders, and help text
+- Non-blocking toast notifications
+- Modal pattern consistent with common UX standards
 
-## Initial Document Scan (CLAUDE.md)
-- **Line 97**: `source ~/.venv/bin/activate` — Linux/Mac only
-- **Line 232**: `source ~/.venv/bin/activate` — Linux/Mac only
-- Both need Windows alternatives documented
-
-## Code Scan Plan
-- Search for `os.path.join` vs `Path.home()` usage
-- Search for hardcoded `/` separators
-- Search for posix-only path assumptions
-- Check all SQLite DB path constructions
+## Gaps/Observations
+- None critical found - main already contains full Issue #2 implementation
+- Minor: Could add input validation for proxy URL format in frontend
+- Minor: Could add a "test connection" button for proxy settings
